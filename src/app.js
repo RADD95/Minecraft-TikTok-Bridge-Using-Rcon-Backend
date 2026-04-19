@@ -1,4 +1,6 @@
 // src/app.js - Servidor Express para Minecraft TikTok Bridge
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -30,17 +32,34 @@ const { requireAuth } = require("./middleware/auth");
 const { requireAdmin } = require("./middleware/admin");
 
 const app = express();
-const PORT = 4567;
+const PORT = Number(process.env.PORT || 4567);
 const CACHE_DIR = path.join(process.cwd(), "data", "cache");
+const CORS_ORIGIN_RAW = String(process.env.CORS_ORIGIN || "").trim();
+
+const allowedCorsOrigins = CORS_ORIGIN_RAW
+  ? CORS_ORIGIN_RAW.split(",").map((origin) => origin.trim()).filter(Boolean)
+  : [];
+
+const corsOptions = {
+  credentials: true,
+  origin: true
+};
+
+if (allowedCorsOrigins.length > 0) {
+  corsOptions.origin = function resolveCorsOrigin(origin, callback) {
+    if (!origin || allowedCorsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Origen no permitido por CORS"));
+  };
+}
 
 if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 app.use("/cache", express.static(CACHE_DIR, {

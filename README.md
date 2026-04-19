@@ -28,6 +28,33 @@ Backend API para Minecraft TikTok Bridge. Este repositorio contiene el servidor 
 npm install
 ```
 
+## Variables de entorno
+
+Este repo incluye un archivo de ejemplo:
+
+- `.env.example`
+
+Para configurar localmente:
+
+```bash
+cp .env.example .env
+```
+
+Variables usadas:
+
+- `PORT`: puerto del backend (default `4567`).
+- `JWT_SECRET`: secreto JWT para autenticación.
+- `CORS_ORIGIN`: orígenes permitidos por CORS (separados por coma).
+- `COOKIE_SAME_SITE`: `lax`, `strict` o `none`.
+- `COOKIE_SECURE`: `true` o `false`.
+- `COOKIE_DOMAIN`: dominio de cookie (opcional).
+
+Ejemplo para frontend en Vercel + backend en VPS:
+
+- `CORS_ORIGIN=https://tu-frontend.vercel.app`
+- `COOKIE_SAME_SITE=none`
+- `COOKIE_SECURE=true`
+
 ## Ejecución
 
 ```bash

@@ -1,6 +1,25 @@
 const authStore = require('../services/infra/auth-store');
 const { signAuthToken, COOKIE_NAME } = require('../middleware/auth');
 
+const COOKIE_SAME_SITE = String(process.env.COOKIE_SAME_SITE || 'lax').toLowerCase();
+const COOKIE_SECURE = String(process.env.COOKIE_SECURE || 'false').toLowerCase() === 'true';
+const COOKIE_DOMAIN = String(process.env.COOKIE_DOMAIN || '').trim();
+
+function getCookieOptions() {
+  const options = {
+    httpOnly: true,
+    sameSite: COOKIE_SAME_SITE,
+    secure: COOKIE_SECURE,
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  };
+
+  if (COOKIE_DOMAIN) {
+    options.domain = COOKIE_DOMAIN;
+  }
+
+  return options;
+}
+
 function buildSafeUser(user) {
   return {
     id: user.id,
@@ -32,12 +51,7 @@ module.exports = {
 
       const token = signAuthToken(user);
 
-      res.cookie(COOKIE_NAME, token, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: false,
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
+      res.cookie(COOKIE_NAME, token, getCookieOptions());
 
       return res.json({
         success: true,
