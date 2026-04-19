@@ -1,0 +1,14 @@
+node_modules/
+.env
+.next/
+build/
+dist/
+npm-debug.log*
+actions.json
+config.json
+stats.json
+package-lock.json
+Scrapper.js
+overlays.json
+.continue
+data/
