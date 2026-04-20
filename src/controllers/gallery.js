@@ -289,6 +289,7 @@ module.exports = {
     try {
       const userId = req.user?.id;
       const galleryId = Number.parseInt(req.params.id, 10);
+      const folderName = String(req.body?.folder || "").trim();
 
       if (!Number.isInteger(galleryId) || galleryId <= 0) {
         return res.status(400).json({ success: false, error: "Id invalido" });
@@ -304,6 +305,13 @@ module.exports = {
         return res.status(404).json({ success: false, error: "Accion no encontrada" });
       }
 
+      if (folderName) {
+        const createResult = storage.createFolder(folderName, userId);
+        if (!createResult.success && createResult.error !== "La carpeta ya existe") {
+          return res.status(400).json({ success: false, error: createResult.error || "No se pudo preparar la carpeta" });
+        }
+      }
+
       const actions = storage.loadActions(userId) || [];
 
       actions.push({
@@ -313,7 +321,9 @@ module.exports = {
         command: row.command || "",
         useQueue: !!row.use_queue,
         repeatPerUnit: !!row.repeat_per_unit,
-        enabled: true
+        enabled: true,
+        minecraftVersion: row.minecraft_version || "",
+        folder: folderName
       });
 
       const saved = storage.saveActions(actions, userId);
@@ -330,6 +340,7 @@ module.exports = {
       return res.json({
         success: true,
         message: "Accion importada",
+        folder: folderName,
         actions: saved
       });
     } catch (error) {
