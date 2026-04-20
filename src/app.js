@@ -8,16 +8,21 @@ const fs = require("fs");
 const crypto = require("crypto");
 const cookieParser = require("cookie-parser");
 
-const { initDb } = require("./services/infra/db");
+const { initDb, getDb } = require("./services/infra/db");
+const { runMigrations } = require("./services/infra/migrations");
+
 initDb();
+runMigrations(getDb());
 
 const configController = require("./controllers/config");
 const rconController = require("./controllers/rcon");
 const tiktokController = require("./controllers/tiktok");
 const actionsController = require("./controllers/actions");
+const foldersController = require("./controllers/folders");
 const statsController = require("./controllers/stats");
 const giftsController = require("./controllers/gifts");
 const overlaysController = require("./controllers/overlays");
+const galleryController = require("./controllers/gallery");
 const authController = require("./controllers/auth");
 const adminUsersController = require("./controllers/admin-users");
 
@@ -332,6 +337,14 @@ app.post("/api/actions/:index", requireAuth, actionsController.update);
 app.put("/api/actions/:index", requireAuth, actionsController.update);
 app.delete("/api/actions/:index", requireAuth, actionsController.delete);
 app.post("/api/actions/:index/test", requireAuth, actionsController.test);
+
+// Folders
+app.get("/api/folders", requireAuth, foldersController.list);
+app.post("/api/folders", requireAuth, foldersController.create);
+app.put("/api/folders/:id/toggle", requireAuth, foldersController.toggle);
+app.put("/api/folders/:id", requireAuth, foldersController.rename);
+app.delete("/api/folders/:id", requireAuth, foldersController.delete);
+
 app.get("/api/gifts", requireAuth, giftsController.get);
 
 // Overlays
@@ -341,6 +354,12 @@ app.get("/api/public/overlays/:id", overlaysController.getPublic);
 app.post("/api/overlays", requireAuth, overlaysController.upsert);
 app.put("/api/overlays/:id", requireAuth, overlaysController.upsert);
 app.delete("/api/overlays/:id", requireAuth, overlaysController.delete);
+
+// Gallery Store
+app.get("/api/gallery/actions", requireAuth, galleryController.list);
+app.post("/api/gallery/actions", requireAuth, galleryController.publish);
+app.post("/api/gallery/actions/:id/import", requireAuth, galleryController.import);
+app.delete("/api/gallery/actions/:id", requireAuth, galleryController.remove);
 
 // RCON
 app.post("/api/rcon/connect", requireAuth, rconController.connect);

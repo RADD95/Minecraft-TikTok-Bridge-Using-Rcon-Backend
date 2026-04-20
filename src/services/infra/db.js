@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { runMigrations } = require('./migrations');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'app.db');
@@ -56,6 +57,7 @@ function initDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+
     CREATE TABLE IF NOT EXISTS stats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL UNIQUE,
@@ -94,12 +96,35 @@ function initDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS gallery_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      author_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      name TEXT DEFAULT '',
+      type TEXT NOT NULL,
+      trigger TEXT DEFAULT '',
+      command TEXT NOT NULL,
+      use_queue INTEGER NOT NULL DEFAULT 0,
+      repeat_per_unit INTEGER NOT NULL DEFAULT 0,
+      minecraft_version TEXT NOT NULL DEFAULT '1.20',
+      imports_count INTEGER NOT NULL DEFAULT 0,
+      is_public INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_actions_user_id ON actions(user_id);
     CREATE INDEX IF NOT EXISTS idx_overlays_user_id ON overlays(user_id);
     CREATE INDEX IF NOT EXISTS idx_queue_user_id ON queue_items(user_id);
     CREATE INDEX IF NOT EXISTS idx_queue_user_status ON queue_items(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
     CREATE INDEX IF NOT EXISTS idx_stats_user_id ON stats(user_id);
+    CREATE INDEX IF NOT EXISTS idx_gallery_author_id ON gallery_actions(author_id);
+    CREATE INDEX IF NOT EXISTS idx_gallery_public_created ON gallery_actions(is_public, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_gallery_type_public ON gallery_actions(type, is_public);
   `);
 }
 

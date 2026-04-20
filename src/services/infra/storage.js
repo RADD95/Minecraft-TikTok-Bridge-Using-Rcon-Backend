@@ -339,6 +339,8 @@ class Storage {
         use_queue,
         repeat_per_unit,
         enabled,
+        minecraft_version,
+        folder,
         created_at,
         updated_at
       FROM actions
@@ -353,6 +355,8 @@ class Storage {
       useQueue: !!row.use_queue,
       repeatPerUnit: !!row.repeat_per_unit,
       enabled: row.enabled !== 0,
+      minecraftVersion: row.minecraft_version || '',
+      folder: row.folder || '',
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }));
@@ -370,8 +374,10 @@ class Storage {
         command,
         use_queue,
         repeat_per_unit,
-        enabled
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        enabled,
+        minecraft_version,
+        folder
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const replaceAll = this.db.transaction((items) => {
@@ -386,7 +392,9 @@ class Storage {
           action?.command || '',
           action?.useQueue ? 1 : 0,
           action?.repeatPerUnit ? 1 : 0,
-          action?.enabled === false ? 0 : 1
+          action?.enabled === false ? 0 : 1,
+          action?.minecraftVersion || '',
+          action?.folder || ''
         );
       }
     });
@@ -549,6 +557,165 @@ class Storage {
 
     replaceAll(Array.isArray(overlays) ? overlays : []);
     return this.loadOverlays(uid);
+  }
+
+  loadFolders(userId = DEFAULT_USER_ID) {
+    const uid = this._normalizeUserId(userId);
+
+    return this.db.prepare(`
+      SELECT id, name, enabled, created_at, updated_at
+      FROM action_folders
+      WHERE user_id = ?
+      ORDER BY datetime(created_at) ASC, id ASC
+    `).all(uid).map(row => ({
+      id: row.id,
+      name: row.name,
+      enabled: row.enabled !== 0,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  createFolder(folderName, userId = DEFAULT_USER_ID) {
+    const uid = this._normalizeUserId(userId);
+
+    try {
+      this.db.prepare(`
+        INSERT INTO action_folders (user_id, name, enabled, created_at, updated_at)
+        VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(uid, folderName);
+
+      const inserted = this.db.prepare(`
+        SELECT id, name, enabled, created_at, updated_at
+        FROM action_folders
+        WHERE user_id = ? AND name = ?
+      `).get(uid, folderName);
+
+      return {
+        success: true,
+        folder: {
+          id: inserted.id,
+          name: inserted.name,
+          enabled: inserted.enabled !== 0,
+          createdAt: inserted.created_at,
+          updatedAt: inserted.updated_at
+        }
+      };
+    } catch (err) {
+      if (err.message.includes('UNIQUE constraint failed')) {
+        return {
+          success: false,
+          error: 'La carpeta ya existe'
+        };
+      }
+      throw err;
+    }
+  }
+
+  toggleFolder(folderId, enabled, userId = DEFAULT_USER_ID) {
+    const uid = this._normalizeUserId(userId);
+
+    this.db.prepare(`
+      UPDATE action_folders
+      SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?
+    `).run(enabled ? 1 : 0, folderId, uid);
+
+    const updated = this.db.prepare(`
+      SELECT id, name, enabled, created_at, updated_at
+      FROM action_folders
+      WHERE id = ? AND user_id = ?
+    `).get(folderId, uid);
+
+    return updated ? {
+      id: updated.id,
+      name: updated.name,
+      enabled: updated.enabled !== 0,
+      createdAt: updated.created_at,
+      updatedAt: updated.updated_at
+    } : null;
+  }
+
+  renameFolder(folderId, newName, userId = DEFAULT_USER_ID) {
+    const uid = this._normalizeUserId(userId);
+    const trimmedName = String(newName || '').trim();
+
+    if (!trimmedName) {
+      return {
+        success: false,
+        error: 'El nombre de la carpeta es requerido'
+      };
+    }
+
+    const existing = this.db.prepare(`
+      SELECT id, name
+      FROM action_folders
+      WHERE id = ? AND user_id = ?
+    `).get(folderId, uid);
+
+    if (!existing) {
+      return {
+        success: false,
+        error: 'Carpeta no encontrada'
+      };
+    }
+
+    try {
+      this.db.prepare(`
+        UPDATE action_folders
+        SET name = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `).run(trimmedName, folderId, uid);
+
+      this.db.prepare(`
+        UPDATE actions
+        SET folder = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND folder = ?
+      `).run(trimmedName, uid, existing.name);
+
+      const updated = this.db.prepare(`
+        SELECT id, name, enabled, created_at, updated_at
+        FROM action_folders
+        WHERE id = ? AND user_id = ?
+      `).get(folderId, uid);
+
+      return {
+        success: true,
+        folder: {
+          id: updated.id,
+          name: updated.name,
+          enabled: updated.enabled !== 0,
+          createdAt: updated.created_at,
+          updatedAt: updated.updated_at
+        }
+      };
+    } catch (err) {
+      if (err.message.includes('UNIQUE constraint failed')) {
+        return {
+          success: false,
+          error: 'La carpeta ya existe'
+        };
+      }
+      throw err;
+    }
+  }
+
+  deleteFolder(folderId, userId = DEFAULT_USER_ID) {
+    const uid = this._normalizeUserId(userId);
+
+    // Remover la carpeta de las acciones antes de eliminarla
+    this.db.prepare(`
+      UPDATE actions
+      SET folder = '', updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND folder IN (
+        SELECT name FROM action_folders WHERE id = ? AND user_id = ?
+      )
+    `).run(uid, folderId, uid);
+
+    this.db.prepare(`
+      DELETE FROM action_folders
+      WHERE id = ? AND user_id = ?
+    `).run(folderId, uid);
   }
 
   _safeJsonParse(value, fallback) {
