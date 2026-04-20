@@ -331,6 +331,7 @@ app.post("/api/actions", requireAuth, actionsController.add);
 app.post("/api/actions/:index", requireAuth, actionsController.update);
 app.put("/api/actions/:index", requireAuth, actionsController.update);
 app.delete("/api/actions/:index", requireAuth, actionsController.delete);
+app.post("/api/actions/:index/test", requireAuth, actionsController.test);
 app.get("/api/gifts", requireAuth, giftsController.get);
 
 // Overlays
