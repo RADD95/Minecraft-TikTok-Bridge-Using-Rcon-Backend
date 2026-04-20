@@ -199,6 +199,92 @@ module.exports = {
     }
   },
 
+  update(req, res) {
+    try {
+      const userId = req.user?.id;
+      const role = req.user?.role;
+      const galleryId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isInteger(galleryId) || galleryId <= 0) {
+        return res.status(400).json({ success: false, error: "Id invalido" });
+      }
+
+      const row = db.prepare(`
+        SELECT *
+        FROM gallery_actions
+        WHERE id = ?
+      `).get(galleryId);
+
+      if (!row) {
+        return res.status(404).json({ success: false, error: "Accion no encontrada" });
+      }
+
+      const isOwner = Number(row.author_id) === Number(userId);
+      const isAdmin = role === "admin";
+
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ success: false, error: "No tienes permiso para editar esta accion" });
+      }
+
+      const body = req.body || {};
+
+      const title = String(body.title || "").trim();
+      const description = String(body.description || "").trim();
+      const minecraftVersion = String(body.minecraftVersion || "").trim();
+      const tags = normalizeTags(body.tags);
+
+      if (!title) {
+        return res.status(400).json({ success: false, error: "Titulo requerido" });
+      }
+
+      if (!minecraftVersion) {
+        return res.status(400).json({ success: false, error: "Version de Minecraft requerida" });
+      }
+
+      const versionRegex = /^[\d.]+$/;
+      if (!versionRegex.test(minecraftVersion)) {
+        return res.status(400).json({ success: false, error: "Version invalida. Solo numeros y puntos (ej: 1.20, 1.20.1)" });
+      }
+
+      db.prepare(`
+        UPDATE gallery_actions
+        SET
+          title = ?,
+          description = ?,
+          tags_json = ?,
+          minecraft_version = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        title,
+        description,
+        JSON.stringify(tags),
+        minecraftVersion,
+        galleryId
+      );
+
+      const updatedRow = db.prepare(`
+        SELECT ga.*, u.username as author_username
+        FROM gallery_actions ga
+        LEFT JOIN users u ON u.id = ga.author_id
+        WHERE ga.id = ?
+      `).get(galleryId);
+
+      logger.info(`✏️ Accion de galeria #${galleryId} editada por usuario #${userId}`);
+
+      return res.json({
+        success: true,
+        item: normalizeGalleryAction(updatedRow, req.user)
+      });
+    } catch (error) {
+      logger.error("Error editando accion de galeria", error);
+      return res.status(500).json({
+        success: false,
+        error: "No se pudo actualizar la accion"
+      });
+    }
+  },
+
   import(req, res) {
     try {
       const userId = req.user?.id;

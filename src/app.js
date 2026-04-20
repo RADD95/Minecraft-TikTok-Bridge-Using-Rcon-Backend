@@ -358,6 +358,7 @@ app.delete("/api/overlays/:id", requireAuth, overlaysController.delete);
 // Gallery Store
 app.get("/api/gallery/actions", requireAuth, galleryController.list);
 app.post("/api/gallery/actions", requireAuth, galleryController.publish);
+app.put("/api/gallery/actions/:id", requireAuth, galleryController.update);
 app.post("/api/gallery/actions/:id/import", requireAuth, galleryController.import);
 app.delete("/api/gallery/actions/:id", requireAuth, galleryController.remove);
 
