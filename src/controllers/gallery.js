@@ -231,6 +231,9 @@ module.exports = {
       const title = String(body.title || "").trim();
       const description = String(body.description || "").trim();
       const minecraftVersion = String(body.minecraftVersion || "").trim();
+      const command = String(body.command || "").trim();
+      const useQueue = !!body.useQueue;
+      const repeatPerUnit = !!body.repeatPerUnit;
       const tags = normalizeTags(body.tags);
 
       if (!title) {
@@ -239,6 +242,14 @@ module.exports = {
 
       if (!minecraftVersion) {
         return res.status(400).json({ success: false, error: "Version de Minecraft requerida" });
+      }
+
+      if (!command) {
+        return res.status(400).json({ success: false, error: "La accion requiere comando" });
+      }
+
+      if (command.length > 4000) {
+        return res.status(400).json({ success: false, error: "Comando demasiado largo" });
       }
 
       const versionRegex = /^[\d.]+$/;
@@ -252,6 +263,9 @@ module.exports = {
           title = ?,
           description = ?,
           tags_json = ?,
+          command = ?,
+          use_queue = ?,
+          repeat_per_unit = ?,
           minecraft_version = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -259,6 +273,9 @@ module.exports = {
         title,
         description,
         JSON.stringify(tags),
+        command,
+        useQueue ? 1 : 0,
+        repeatPerUnit ? 1 : 0,
         minecraftVersion,
         galleryId
       );
