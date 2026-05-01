@@ -282,7 +282,9 @@ class ActionsService {
           for (let i = 0; i < repeat; i++) {
             expanded.push(...commands);
           }
-          commands = expanded;
+
+          // Keep a single group so queued execution does not wait GROUP_DELAY_MS per unit.
+          commandGroups = [expanded];
 
           this.logForUser(
             "info",

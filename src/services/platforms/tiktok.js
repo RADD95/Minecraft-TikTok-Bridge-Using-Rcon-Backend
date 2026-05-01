@@ -4,6 +4,9 @@ const actionsService = require("../core/actions");
 const logger = require("../../utils/logger");
 
 const DEFAULT_USER_ID = 1;
+const FALLBACK_SIGN_API_KEY =
+  process.env.EULER_FALLBACK_API_KEY ||
+  "euler_YTVmYzhjY2MzNzgxNDA4MGMxZjFhYzg2NzUwNjhiMzc5NTRkMWQ0ODI1NmE1MzM3OWU3YmNj";
 
 class TikTokClient {
   constructor(userId) {
@@ -15,11 +18,61 @@ class TikTokClient {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 5000;
-    this.autoReconnect = true;
+    // Disable automatic reconnection by default to avoid aggressive retry loops.
+    // Reconnections will only occur if explicitly enabled elsewhere.
+    this.autoReconnect = false;
     this.connectTime = 0;
     this.currentUsername = null;
     this.lastAttempt = 0;
     this.lastError = null;
+  }
+
+  _buildConnectionOptions(useFallbackSignApiKey = false) {
+    const options = {
+      processInitialData: false,
+      enableExtendedGiftInfo: true,
+      disableEulerFallbacks: false
+    };
+
+    if (useFallbackSignApiKey && FALLBACK_SIGN_API_KEY) {
+      options.signApiKey = FALLBACK_SIGN_API_KEY;
+    }
+
+    return options;
+  }
+
+  _isSignatureRateLimitError(err) {
+    const name = String(err?.name || "");
+    const message = String(err?.message || err || "");
+
+    return (
+      name === "SignatureRateLimitError" ||
+      message.includes("rate_limit_account_hour") ||
+      message.includes("Too many connections started") ||
+      message.includes("Rate Limited")
+    );
+  }
+
+  async _disposeConnection() {
+    if (!this.connection) return;
+
+    this.connection.removeAllListeners();
+
+    try {
+      await this.connection.disconnect();
+    } catch (err) {
+      logger.warn(`⚠️ [TikTok user:${this.userId}] Error al limpiar conexión: ${err?.message || err}`);
+    }
+
+    this.connection = null;
+  }
+
+  async _connectWithOptions(cleanUsername, useFallbackSignApiKey = false) {
+    this.connection = new TikTokLiveConnection(cleanUsername, this._buildConnectionOptions(useFallbackSignApiKey));
+
+    this._setupListeners();
+
+    await this.connection.connect();
   }
 
   async start(username) {
@@ -29,8 +82,9 @@ class TikTokClient {
       throw new Error("Username de TikTok requerido");
     }
 
-    if (Date.now() - this.lastAttempt < 10000) {
-      logger.info(`⏳ [TikTok user:${this.userId}] Bloqueado 10s anti-spam activo...`);
+    // Only apply the 10s anti-spam block for automatic reconnect attempts.
+    if (this.autoReconnect && Date.now() - this.lastAttempt < 10000) {
+      logger.info(`⏳ [TikTok user:${this.userId}] Bloqueado 10s anti-spam activo para reconexión automática...`);
       return false;
     }
 
@@ -64,18 +118,11 @@ class TikTokClient {
 
     this.currentUsername = cleanUsername;
     this.connectTime = Date.now();
-    this.autoReconnect = true;
+    // Do not enable auto reconnect automatically; keep reconnection disabled
+    // unless explicitly configured elsewhere.
 
     try {
-      this.connection = new TikTokLiveConnection(cleanUsername, {
-        processInitialData: false,
-        enableExtendedGiftInfo: true,
-        disableEulerFallbacks: false
-      });
-
-      this._setupListeners();
-
-      await this.connection.connect();
+      await this._connectWithOptions(cleanUsername, false);
 
       this.isConnected = true;
       this.isConnecting = false;
@@ -85,26 +132,51 @@ class TikTokClient {
       logger.info(`✅ [TikTok user:${this.userId}] Conectado a TikTok LIVE de: ${cleanUsername}`);
       return true;
     } catch (err) {
-      this.isConnecting = false;
-      this.isConnected = false;
-
       const errorMsg = err?.message || String(err);
       this.lastError = errorMsg;
 
       if (errorMsg.includes("user_not_found")) {
+        this.isConnecting = false;
+        this.isConnected = false;
         logger.error(`❌ [TikTok user:${this.userId}] Usuario no encontrado o no está en vivo: ${cleanUsername}`);
         this.autoReconnect = false;
         return false;
       }
 
+      if (this._isSignatureRateLimitError(err) && FALLBACK_SIGN_API_KEY) {
+        logger.warn(`⚠️ [TikTok user:${this.userId}] Rate limit en firma pública. Reintentando con API privada...`);
+
+        await this._disposeConnection();
+
+        try {
+          await this._connectWithOptions(cleanUsername, true);
+
+          this.isConnected = true;
+          this.isConnecting = false;
+          this.reconnectAttempts = 0;
+          this.lastError = null;
+
+          logger.info(`✅ [TikTok user:${this.userId}] Conectado a TikTok LIVE con API privada: ${cleanUsername}`);
+          return true;
+        } catch (fallbackErr) {
+          this.isConnecting = false;
+          this.isConnected = false;
+          this.lastError = fallbackErr?.message || String(fallbackErr);
+
+          logger.error(`❌ [TikTok user:${this.userId}] Error conectando con API privada:`, fallbackErr);
+          return false;
+        }
+      }
+
+      this.isConnecting = false;
+      this.isConnected = false;
+
       if (errorMsg.includes("blocked by TikTok") || errorMsg.includes("SIGI_STATE")) {
         logger.error(`❌ [TikTok user:${this.userId}] TikTok está bloqueando la conexión. Intenta más tarde.`);
-        this._scheduleReconnect(30000);
         return false;
       }
 
       logger.error(`❌ [TikTok user:${this.userId}] Error conectando a TikTok:`, err);
-      this._scheduleReconnect();
       return false;
     }
   }
