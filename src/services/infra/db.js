@@ -51,9 +51,17 @@ function initDb() {
       command TEXT NOT NULL,
       use_queue INTEGER NOT NULL DEFAULT 0,
       repeat_per_unit INTEGER NOT NULL DEFAULT 0,
+      audio_enabled INTEGER NOT NULL DEFAULT 0,
+      audio_asset TEXT NOT NULL DEFAULT '',
+      audio_volume INTEGER NOT NULL DEFAULT 70,
+      audio_wait_for_finish INTEGER NOT NULL DEFAULT 0,
+      audio_replace_current INTEGER NOT NULL DEFAULT 0,
+      audio_play_once_per_combo INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      minecraft_version TEXT DEFAULT '',
+      folder TEXT DEFAULT '',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
@@ -126,6 +134,22 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_gallery_public_created ON gallery_actions(is_public, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_gallery_type_public ON gallery_actions(type, is_public);
   `);
+
+  const actionColumns = new Set(
+    db.prepare(`PRAGMA table_info(actions)`).all().map((column) => column.name)
+  );
+
+  const addColumnIfMissing = (columnName, definition) => {
+    if (actionColumns.has(columnName)) return;
+    db.exec(`ALTER TABLE actions ADD COLUMN ${definition}`);
+    actionColumns.add(columnName);
+  };
+
+  addColumnIfMissing('audio_wait_for_finish', 'audio_wait_for_finish INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('audio_replace_current', 'audio_replace_current INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('audio_play_once_per_combo', 'audio_play_once_per_combo INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing('minecraft_version', "minecraft_version TEXT DEFAULT ''");
+  addColumnIfMissing('folder', "folder TEXT DEFAULT ''");
 }
 
 function getDb() {

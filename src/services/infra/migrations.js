@@ -54,6 +54,70 @@ function runMigrations(db) {
       // Índice podría ya existir
     }
 
+    // Migración 4: Campos de audio por acción
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_enabled INTEGER NOT NULL DEFAULT 0`).run();
+      logger.info('✅ Migración: Columna audio_enabled agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_asset TEXT NOT NULL DEFAULT ''`).run();
+      logger.info('✅ Migración: Columna audio_asset agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_volume INTEGER NOT NULL DEFAULT 70`).run();
+      logger.info('✅ Migración: Columna audio_volume agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_mode TEXT NOT NULL DEFAULT 'once_per_event'`).run();
+      logger.info('✅ Migración: Columna audio_mode agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_queue_policy TEXT NOT NULL DEFAULT 'enqueue'`).run();
+      logger.info('✅ Migración: Columna audio_queue_policy agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN wait_for_audio_finish INTEGER NOT NULL DEFAULT 0`).run();
+      logger.info('✅ Migración: Columna wait_for_audio_finish agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
+    try {
+      db.prepare(`ALTER TABLE actions ADD COLUMN audio_max_plays INTEGER NOT NULL DEFAULT 5`).run();
+      logger.info('✅ Migración: Columna audio_max_plays agregada a actions');
+    } catch (err) {
+      if (!err.message.includes('duplicate column')) {
+        throw err;
+      }
+    }
+
     logger.info('✅ Todas las migraciones completadas');
   } catch (err) {
     logger.error('❌ Error en migraciones:', err);

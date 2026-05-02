@@ -4,9 +4,7 @@ const actionsService = require("../core/actions");
 const logger = require("../../utils/logger");
 
 const DEFAULT_USER_ID = 1;
-const FALLBACK_SIGN_API_KEY =
-  process.env.EULER_FALLBACK_API_KEY ||
-  "euler_YTVmYzhjY2MzNzgxNDA4MGMxZjFhYzg2NzUwNjhiMzc5NTRkMWQ0ODI1NmE1MzM3OWU3YmNj";
+const FALLBACK_SIGN_API_KEY = process.env.EULER_FALLBACK_API_KEY || "";
 
 class TikTokClient {
   constructor(userId) {

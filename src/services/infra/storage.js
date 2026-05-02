@@ -21,6 +21,30 @@ class Storage {
     this._runLegacyMigrationOnce(DEFAULT_USER_ID);
   }
 
+  _normalizeAudioMode(value) {
+    const allowed = new Set(['once_per_event', 'per_unit', 'once_after_combo']);
+    const normalized = String(value || '').trim();
+    return allowed.has(normalized) ? normalized : 'once_per_event';
+  }
+
+  _normalizeAudioQueuePolicy(value) {
+    const allowed = new Set(['enqueue', 'replace_current', 'drop_if_busy']);
+    const normalized = String(value || '').trim();
+    return allowed.has(normalized) ? normalized : 'enqueue';
+  }
+
+  _normalizeAudioVolume(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return 70;
+    return Math.max(0, Math.min(100, parsed));
+  }
+
+  _normalizeAudioMaxPlays(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return 5;
+    return Math.max(1, Math.min(50, parsed));
+  }
+
   _ensureDefaultUser() {
     const existing = this.db.prepare(`SELECT id FROM users WHERE id = ?`).get(DEFAULT_USER_ID);
     if (existing) return;
@@ -338,6 +362,12 @@ class Storage {
         command,
         use_queue,
         repeat_per_unit,
+        audio_enabled,
+        audio_asset,
+        audio_volume,
+        audio_wait_for_finish,
+        audio_replace_current,
+        audio_play_once_per_combo,
         enabled,
         minecraft_version,
         folder,
@@ -354,6 +384,12 @@ class Storage {
       command: row.command || '',
       useQueue: !!row.use_queue,
       repeatPerUnit: !!row.repeat_per_unit,
+      audioEnabled: !!row.audio_enabled,
+      audioAsset: row.audio_asset || '',
+      audioVolume: row.audio_volume || 70,
+      audioWaitForFinish: !!row.audio_wait_for_finish,
+      audioReplaceCurrent: !!row.audio_replace_current,
+      audioPlayOncePerCombo: row.audio_play_once_per_combo !== 0,
       enabled: row.enabled !== 0,
       minecraftVersion: row.minecraft_version || '',
       folder: row.folder || '',
@@ -374,10 +410,16 @@ class Storage {
         command,
         use_queue,
         repeat_per_unit,
+        audio_enabled,
+        audio_asset,
+        audio_volume,
+        audio_wait_for_finish,
+        audio_replace_current,
+        audio_play_once_per_combo,
         enabled,
         minecraft_version,
         folder
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const replaceAll = this.db.transaction((items) => {
@@ -392,6 +434,12 @@ class Storage {
           action?.command || '',
           action?.useQueue ? 1 : 0,
           action?.repeatPerUnit ? 1 : 0,
+          action?.audioEnabled ? 1 : 0,
+          action?.audioAsset || '',
+          Math.max(0, Math.min(100, Number.parseInt(action?.audioVolume, 10) || 70)),
+          action?.audioWaitForFinish ? 1 : 0,
+          action?.audioReplaceCurrent ? 1 : 0,
+          action?.audioPlayOncePerCombo === false ? 0 : 1,
           action?.enabled === false ? 0 : 1,
           action?.minecraftVersion || '',
           action?.folder || ''

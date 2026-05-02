@@ -54,17 +54,20 @@ class CommandQueue extends EventEmitter {
     return {
       userId: uid,
       pendingGroups: runtime.queue.length,
-      pendingList: runtime.queue.map((group, index) => ({
-        position: index + 1,
-        source: group.source,
-        totalCommands: Array.isArray(group.commands) ? group.commands.length : 0,
-        createdAt: group.createdAt || null
-      })),
+      pendingList: runtime.queue.map((group, index) => {
+        return {
+          position: index + 1,
+          source: group.source,
+          totalCommands: Array.isArray(group.commands) ? group.commands.length : 0,
+          createdAt: group.createdAt || null
+        };
+      }),
       isProcessing: runtime.isProcessing,
       currentGroup: runtime.currentGroup
         ? {
-            source: runtime.currentGroup.source,
-            totalCommands: runtime.currentGroup.commands.length,
+            type: 'commands',
+            source: runtime.currentGroup.source || 'unknown',
+            totalCommands: Array.isArray(runtime.currentGroup.commands) ? runtime.currentGroup.commands.length : 0,
             startedAt: runtime.currentGroup.startedAt || null
           }
         : null,
@@ -79,6 +82,7 @@ class CommandQueue extends EventEmitter {
     const runtime = this.ensureRuntime(uid);
 
     runtime.queue.push({
+      type: 'commands',
       commands,
       source,
       createdAt: Date.now()
@@ -155,12 +159,11 @@ class CommandQueue extends EventEmitter {
         }
 
         const next = runtime.queue.shift();
+
         const { commands, source } = next;
 
-        runtime.currentGroup = {
-          ...next,
-          startedAt: Date.now()
-        };
+        runtime.currentGroup = next;
+        runtime.currentGroup.startedAt = Date.now();
         this._emitUpdate("group-start", uid);
 
         if (runtime.lastGroupFinishedAt && this.GROUP_DELAY_MS > 0) {
@@ -224,6 +227,13 @@ class CommandQueue extends EventEmitter {
 
         runtime.lastGroupFinishedAt = Date.now();
         logger.info(`📦 Grupo completado [${source}]`, { userId: uid });
+
+        try {
+          if (runtime.currentGroup && runtime.currentGroup._completion && typeof runtime.currentGroup._completion.resolve === 'function') {
+            runtime.currentGroup._completion.resolve({ success: true, source });
+          }
+        } catch (e) {}
+
         runtime.currentGroup = null;
         this._emitUpdate("group-finished", uid);
       }

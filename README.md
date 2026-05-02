@@ -44,6 +44,7 @@ Variables usadas:
 
 - `PORT`: puerto del backend (default `4567`).
 - `JWT_SECRET`: secreto JWT para autenticación.
+- `EULER_FALLBACK_API_KEY`: llave opcional para el fallback de firma de TikTok LIVE.
 - `CORS_ORIGIN`: orígenes permitidos por CORS (separados por coma).
 - `COOKIE_SAME_SITE`: `lax`, `strict` o `none`.
 - `COOKIE_SECURE`: `true` o `false`.

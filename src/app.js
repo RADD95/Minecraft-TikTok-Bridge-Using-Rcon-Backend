@@ -32,6 +32,7 @@ const storage = require("./services/infra/storage");
 const rconService = require("./services/infra/rcon");
 const tiktokService = require("./services/platforms/tiktok");
 const queue = require("./services/core/queue");
+const audioService = require("./services/core/audio");
 
 const { requireAuth } = require("./middleware/auth");
 const { requireAdmin } = require("./middleware/admin");
@@ -65,7 +66,7 @@ if (!fs.existsSync(CACHE_DIR)) {
 }
 
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
 app.use(cookieParser());
 app.use("/cache", express.static(CACHE_DIR, {
   maxAge: "30d",
@@ -420,6 +421,45 @@ app.post("/api/queue/retry", requireAuth, (req, res) => {
   });
 });
 
+app.post("/api/audio/ack", requireAuth, (req, res) => {
+  const userId = req.user?.id;
+  const cueId = String(req.body?.cueId || "").trim();
+  const status = String(req.body?.status || "finished").trim();
+  const reason = String(req.body?.reason || "").trim() || null;
+
+  if (!cueId) {
+    return res.status(400).json({
+      success: false,
+      error: "cueId requerido"
+    });
+  }
+
+  try {
+    if (typeof audioService.finishCueForUser === 'function') {
+      const runtimeResult = audioService.finishCueForUser(cueId, userId, { status, reason });
+
+      if (!runtimeResult?.success) {
+        return res.status(400).json({
+          success: false,
+          error: runtimeResult?.error || 'No se pudo confirmar el audio'
+        });
+      }
+
+      return res.json({
+        success: true,
+        result: runtimeResult
+      });
+    }
+  } catch (e) {
+    logger.warn('Error finalizando cue en audioService', e);
+  }
+
+  return res.status(400).json({
+    success: false,
+    error: 'No se pudo confirmar el audio'
+  });
+});
+
 // SSE endpoint
 app.get("/api/logs/stream", requireAuth, (req, res) => {
   const userId = req.user?.id;
@@ -490,11 +530,51 @@ const onNewLog = (newLog) => {
     pushStatus();
   };
 
+  const onAudioCue = (payload) => {
+    if (payload?.userId != null && String(payload.userId) !== String(userId)) {
+      return;
+    }
+
+    // Normalize payload so frontend receives predictable fields
+    const normalized = {
+      cueId: String(payload?.cueId || payload?.id || '').trim(),
+      userId: payload?.userId || userId,
+      asset: payload?.asset || payload?.url || null,
+      volume: payload?.volume != null ? payload.volume : payload?.vol || null,
+      actionName: payload?.actionName || payload?.title || null,
+      eventType: payload?.eventType || null,
+      createdAt: payload?.createdAt || Date.now()
+    };
+
+    writeSse(res, "audiocue", normalized);
+  };
+
+  const onAudioStop = (payload) => {
+    if (payload?.userId != null && String(payload.userId) !== String(userId)) {
+      return;
+    }
+
+    const normalized = {
+      cueId: String(payload?.cueId || payload?.id || '').trim(),
+      userId: payload?.userId || userId,
+      reason: payload?.reason || null,
+      status: payload?.status || null
+    };
+
+    writeSse(res, "audiostop", normalized);
+  };
+
   logger.on("newLog", onNewLog);
   logger.on("logs:cleared", onLogsCleared);
 
   if (typeof queue.on === "function") {
     queue.on("update", onQueueUpdate);
+  }
+
+  if (typeof audioService.on === "function") {
+    // keep legacy audioService events for compatibility
+    audioService.on("cue", onAudioCue);
+    audioService.on("stop", onAudioStop);
   }
 
   const heartbeat = setInterval(() => {
@@ -520,8 +600,72 @@ const onNewLog = (newLog) => {
       queue.off("update", onQueueUpdate);
     }
 
+    if (typeof audioService.off === "function") {
+      audioService.off("cue", onAudioCue);
+      audioService.off("stop", onAudioStop);
+    }
+
     res.end();
   });
+});
+
+app.post("/api/cache-audio", requireAuth, async (req, res) => {
+  try {
+    const fileNameRaw = String(req.body?.fileName || "audio").trim();
+    const mimeTypeRaw = String(req.body?.mimeType || "").trim().toLowerCase();
+    const dataBase64Raw = String(req.body?.dataBase64 || "").trim();
+
+    if (!dataBase64Raw) {
+      return res.status(400).json({ success: false, error: "dataBase64 requerido" });
+    }
+
+    const m = dataBase64Raw.match(/^data:([^;]+);base64,(.+)$/i);
+    const mimeType = (m?.[1] || mimeTypeRaw || "application/octet-stream").toLowerCase();
+    const base64Payload = (m?.[2] || dataBase64Raw).trim();
+
+    const buf = Buffer.from(base64Payload, "base64");
+
+    if (!buf || !buf.length) {
+      return res.status(400).json({ success: false, error: "Audio invalido" });
+    }
+
+    if (buf.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ success: false, error: "Audio demasiado grande (max 10MB)" });
+    }
+
+    const mimeToExt = {
+      "audio/mpeg": ".mp3",
+      "audio/mp3": ".mp3",
+      "audio/wav": ".wav",
+      "audio/x-wav": ".wav",
+      "audio/ogg": ".ogg",
+      "audio/webm": ".webm",
+      "audio/mp4": ".m4a",
+      "audio/x-m4a": ".m4a",
+      "audio/aac": ".aac"
+    };
+
+    const allowed = new Set([".mp3", ".wav", ".ogg", ".webm", ".m4a", ".aac"]);
+    const fromName = path.extname(fileNameRaw).toLowerCase();
+    const ext = allowed.has(fromName)
+      ? fromName
+      : (mimeToExt[mimeType] && allowed.has(mimeToExt[mimeType]) ? mimeToExt[mimeType] : ".mp3");
+
+    const hash = crypto.createHash("sha1").update(buf).digest("hex");
+    const fileName = `audio_${hash}${ext}`;
+    const filePath = path.join(CACHE_DIR, fileName);
+
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, buf);
+    }
+
+    return res.json({
+      success: true,
+      cachedUrl: `/cache/${fileName}`
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || String(e) });
+  }
 });
 
 // Cache de imágenes TikTok / Minecraft para el editor

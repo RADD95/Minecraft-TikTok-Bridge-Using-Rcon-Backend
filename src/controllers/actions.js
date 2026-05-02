@@ -1,9 +1,41 @@
 // src/controllers/actions.js - Controlador para manejar acciones por usuario autenticado
+const fs = require('fs');
+const path = require('path');
 const storage = require('../services/infra/storage');
 const logger = require('../utils/logger');
 const actionsService = require('../services/core/actions');
 const queue = require('../services/core/queue');
 const rconService = require('../services/infra/rcon');
+
+const CACHE_DIR = path.join(process.cwd(), 'data', 'cache');
+
+function isManagedAudioAsset(assetPath) {
+  const value = String(assetPath || '').trim();
+  return value.startsWith('/cache/audio_');
+}
+
+function cleanupOrphanAudioAsset(assetPath, allActions = []) {
+  if (!isManagedAudioAsset(assetPath)) return;
+
+  const stillReferenced = (Array.isArray(allActions) ? allActions : [])
+    .some((action) => String(action?.audioAsset || '').trim() === String(assetPath || '').trim());
+
+  if (stillReferenced) return;
+
+  const baseName = path.basename(String(assetPath || '').replace(/^\/cache\//, ''));
+  if (!baseName || baseName === '.' || baseName === '..') return;
+
+  const abs = path.join(CACHE_DIR, baseName);
+  if (!abs.startsWith(CACHE_DIR)) return;
+
+  try {
+    if (fs.existsSync(abs)) {
+      fs.unlinkSync(abs);
+    }
+  } catch (err) {
+    logger.warn(`No se pudo borrar audio huerfano ${baseName}: ${err?.message || err}`);
+  }
+}
 
 function buildDefaultTestData(action = {}) {
   const type = String(action.type || 'gift').toLowerCase();
@@ -96,12 +128,14 @@ module.exports = {
         });
       }
 
+      const previousAsset = actions[index]?.audioAsset || '';
       actions[index] = {
         ...actions[index],
         ...(req.body || {})
       };
 
       const saved = storage.saveActions(actions, userId);
+      cleanupOrphanAudioAsset(previousAsset, saved);
 
       logger.info(`✏️ Acción actualizada para usuario #${userId}, índice ${index}`);
 
@@ -136,6 +170,7 @@ module.exports = {
       actions.splice(index, 1);
 
       const saved = storage.saveActions(actions, userId);
+      cleanupOrphanAudioAsset(removed?.audioAsset || '', saved);
 
       logger.info(`🗑️ Acción eliminada para usuario #${userId}, índice ${index}`);
 
@@ -217,6 +252,19 @@ module.exports = {
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
         }
+      }
+
+      // Also attempt to enqueue/play audio for the action as a real event would
+      try {
+        const audioPlayCount = typeof actionsService._getAudioPlayCount === 'function'
+          ? actionsService._getAudioPlayCount(type, payload, action, 1)
+          : 1;
+
+        if (typeof actionsService._playAudioForAction === 'function') {
+          await actionsService._playAudioForAction(action, type, userId, audioPlayCount);
+        }
+      } catch (e) {
+        logger.warn(`No se pudo reproducir audio durante la prueba de acción #${index}: ${e?.message || e}`);
       }
 
       logger.info(`▶️ Test manual de acción #${index} para usuario #${userId}`);

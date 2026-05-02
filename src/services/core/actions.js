@@ -4,10 +4,15 @@ const statsService = require("./stats");
 const rconService = require("../infra/rcon");
 const logger = require("../../utils/logger");
 const queue = require("./queue");
+const audioService = require("./audio");
 
 const DEFAULT_USER_ID = 1;
 
 class ActionsService {
+  constructor() {
+    this.userEventChains = new Map();
+  }
+
   normalizeUserId(userId) {
     return Number.isInteger(Number(userId)) ? Number(userId) : DEFAULT_USER_ID;
   }
@@ -151,7 +156,64 @@ class ActionsService {
       .map((c) => c.replace(/^\s*\/+\s*/, ""));
   }
 
-  async handleEvent(type, data = {}, userId = DEFAULT_USER_ID) {
+  _getAudioPlayCount(type, data, action, actionRepeatMultiplier = 1) {
+    if (type === "gift" && action?.repeatPerUnit) {
+      return Math.max(1, Number.parseInt(data?.repeatcount, 10) || 1);
+    }
+
+    if (type === "like" && action?.repeatPerUnit) {
+      return Math.max(1, Number.parseInt(actionRepeatMultiplier, 10) || 1);
+    }
+
+    return 1;
+  }
+
+  async _playAudioForAction(action, type, uid, count = 1) {
+    if (!action?.audioEnabled) return { triggered: 0, skipped: true };
+
+    const asset = String(action.audioAsset || "").trim();
+    if (!asset) return { triggered: 0, skipped: true };
+
+    const planned = Math.max(1, Number.parseInt(count, 10) || 1);
+    const waitForFinish = !!action.audioWaitForFinish;
+    const replaceCurrent = !!action.audioReplaceCurrent;
+    // Si audioPlayOncePerCombo es true, reproducir solo 1 vez. Si es false, reproducir 'planned' veces
+    const repeatCount = action.audioPlayOncePerCombo !== false ? 1 : planned;
+
+    let accepted = 0;
+
+    for (let i = 0; i < repeatCount; i++) {
+      const result = await audioService.enqueue({
+        userId: uid,
+        asset,
+        volume: action.audioVolume,
+        actionName: action.name,
+        eventType: type,
+        waitForFinish,
+        replaceCurrent
+      });
+
+      if (result?.accepted) {
+        accepted++;
+      }
+    }
+
+    if (accepted > 0) {
+      this.logForUser(
+        "info",
+        `🔊 Audio [${action.name || type}] enviado ${accepted}/${repeatCount} vez/veces${waitForFinish ? " (espera fin)" : ""}${replaceCurrent ? " (reemplaza actuales)" : ""}${action.audioPlayOncePerCombo !== false ? " (1 por combo)" : ""}`,
+        uid
+      );
+    }
+
+    return {
+      triggered: accepted,
+      requested: repeatCount,
+      skipped: accepted === 0
+    };
+  }
+
+  async _handleEvent(type, data = {}, userId = DEFAULT_USER_ID) {
     const uid = this.normalizeUserId(userId);
     const actions = storage.loadActions(uid) || [];
     let executed = 0;
@@ -294,6 +356,9 @@ class ActionsService {
         }
       }
 
+      const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
+      await this._playAudioForAction(action, type, uid, audioPlayCount);
+
         const shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
 
         const sourceName =
@@ -372,6 +437,25 @@ class ActionsService {
       queued,
       stats
     };
+  }
+
+  async handleEvent(type, data = {}, userId = DEFAULT_USER_ID) {
+    const uid = this.normalizeUserId(userId);
+    const previousChain = this.userEventChains.get(uid) || Promise.resolve();
+
+    const nextChain = previousChain
+      .catch(() => undefined)
+      .then(() => this._handleEvent(type, data, uid));
+
+    this.userEventChains.set(uid, nextChain);
+
+    try {
+      return await nextChain;
+    } finally {
+      if (this.userEventChains.get(uid) === nextChain) {
+        this.userEventChains.delete(uid);
+      }
+    }
   }
 }
 
