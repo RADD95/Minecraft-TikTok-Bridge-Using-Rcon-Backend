@@ -326,86 +326,70 @@ class ActionsService {
 
       if (!commands.length) continue;
 
-      let commandGroups = [commands];
+      const sourceName =
+        action.name ||
+        `${type}-${data.giftname || String(data.comment || "").slice(0, 10) || "event"}-u${uid}`;
 
-      if (type === "like" && actionRepeatMultiplier > 1) {
-        commandGroups = Array.from(
-          { length: actionRepeatMultiplier },
-          () => [...commands]
-        );
-
-        this.logForUser(
-          "info",
-          `🔁 Likes separados: ${actionRepeatMultiplier} grupo(s) para acción [${action.name || action.trigger || "like"}]`,
-          uid
-        );
-      }
+      // Determinar si es combo y cuántas iteraciones
+      let isCombo = false;
+      let comboIterations = 1;
 
       if (type === "gift" && action.repeatPerUnit) {
         const repeat = Number.parseInt(data.repeatcount, 10) || 1;
-
         if (repeat > 1) {
-          const expanded = [];
-          for (let i = 0; i < repeat; i++) {
-            expanded.push(...commands);
-          }
-
-          // Keep a single group so queued execution does not wait GROUP_DELAY_MS per unit.
-          commandGroups = [expanded];
-
-          this.logForUser(
-            "info",
-            `🔁 Combo expandido: ${repeat}x para acción [${action.name || action.trigger || "gift"}]`,
-            uid
-          );
+          isCombo = true;
+          comboIterations = repeat;
         }
       }
 
-        const shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
+      if (type === "like" && actionRepeatMultiplier > 1) {
+        isCombo = true;
+        comboIterations = actionRepeatMultiplier;
+      }
 
-        const sourceName =
-          action.name ||
-          `${type}-${data.giftname || String(data.comment || "").slice(0, 10) || "event"}-u${uid}`;
+      // En combos, SIEMPRE ejecución directa (no cola) para sincronizar audio por iteración
+      let shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
+      if (isCombo) {
+        shouldQueue = false;
+      }
 
-        if (shouldQueue) {
-          for (let groupIndex = 0; groupIndex < commandGroups.length; groupIndex++) {
-            const groupCommands = commandGroups[groupIndex];
-            const groupSource =
-              commandGroups.length > 1
-                ? `${sourceName} [${groupIndex + 1}/${commandGroups.length}]`
-                : sourceName;
+      if (isCombo) {
+        // Ejecución por iteraciones: cada iteración es comandos + audio
+        this.logForUser(
+          "info",
+          `🔁 ${comboIterations} iteración(es) para acción [${action.name || action.trigger || type}]`,
+          uid
+        );
 
-            queue.add(groupCommands, groupSource, uid);
+        for (let iter = 0; iter < comboIterations; iter++) {
+          const iterLabel = `[${iter + 1}/${comboIterations}]`;
+          const iterSource = `${sourceName} ${iterLabel}`;
+
+          // Ejecutar comandos de esta iteración
+          if (shouldQueue) {
+            queue.add([...commands], iterSource, uid);
             queued++;
 
             this.logForUser(
               "info",
-              `📋 [${groupSource}] grupo a cola (${groupCommands.length} comandos)`,
+              `📋 ${iterSource} a cola (${commands.length} comandos)`,
               uid
             );
-          }
-        } else {
-          for (let groupIndex = 0; groupIndex < commandGroups.length; groupIndex++) {
-            const groupCommands = commandGroups[groupIndex];
-            const groupSource =
-              commandGroups.length > 1
-                ? `${sourceName} [${groupIndex + 1}/${commandGroups.length}]`
-                : sourceName;
-
-            for (let i = 0; i < groupCommands.length; i++) {
-              const cmd = groupCommands[i];
+          } else {
+            for (let i = 0; i < commands.length; i++) {
+              const cmd = commands[i];
 
               try {
                 this.logForUser(
                   "command",
-                  `[${action.name || groupSource}] ${cmd}`,
+                  `${iterSource} ${cmd}`,
                   uid
                 );
 
                 await rconService.send(cmd, uid);
                 executed++;
 
-                if (i < groupCommands.length - 1) {
+                if (i < commands.length - 1) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
                 }
               } catch (err) {
@@ -416,15 +400,93 @@ class ActionsService {
                 );
               }
             }
+          }
 
-            if (groupIndex < commandGroups.length - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 100));
+          // Reproducir audio para esta iteración (respeta audioPlayOncePerCombo)
+          const shouldPlayAudio = !action.audioPlayOncePerCombo || iter === 0;
+          if (shouldPlayAudio) {
+            const audioPlayCount = 1; // 1 audio por iteración (cuando aplicable)
+            await this._playAudioForAction(action, type, uid, audioPlayCount);
+          }
+
+          // Si waitForFinish está activo, esperar a que el audio termine antes de siguiente iteración
+          if (shouldPlayAudio && action.audioWaitForFinish && action.audioEnabled) {
+            const audioAsset = String(action.audioAsset || "").trim();
+            if (audioAsset) {
+              // Esperar a que la anterior cue termine
+              await new Promise((resolve) => {
+                const checkInterval = setInterval(() => {
+                  const pending = Array.from(audioService.pendingCues?.values?.() || [])
+                    .filter((item) => String(item.cue?.userId) === String(uid));
+
+                  if (pending.length === 0) {
+                    clearInterval(checkInterval);
+                    resolve();
+                  }
+                }, 100);
+
+                // Timeout de 120s por si acaso
+                setTimeout(() => {
+                  clearInterval(checkInterval);
+                  resolve();
+                }, 120000);
+              });
+            }
+          }
+
+          // Pequeño delay entre iteraciones
+          if (iter < comboIterations - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+      } else {
+        // Ejecución normal (sin combo): 1 grupo de comandos + audio
+        const commandGroups = [commands];
+
+        if (shouldQueue) {
+          for (let groupIndex = 0; groupIndex < commandGroups.length; groupIndex++) {
+            const groupCommands = commandGroups[groupIndex];
+
+            queue.add(groupCommands, sourceName, uid);
+            queued++;
+
+            this.logForUser(
+              "info",
+              `📋 [${sourceName}] grupo a cola (${groupCommands.length} comandos)`,
+              uid
+            );
+          }
+        } else {
+          for (let i = 0; i < commands.length; i++) {
+            const cmd = commands[i];
+
+            try {
+              this.logForUser(
+                "command",
+                `[${action.name || sourceName}] ${cmd}`,
+                uid
+              );
+
+              await rconService.send(cmd, uid);
+              executed++;
+
+              if (i < commands.length - 1) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+              }
+            } catch (err) {
+              this.logForUser(
+                "error",
+                `❌ Error ejecutando comando: ${err?.message || err}`,
+                uid
+              );
             }
           }
         }
 
-      const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
-      await this._playAudioForAction(action, type, uid, audioPlayCount);
+        // Reproducir audio una sola vez (sin combo)
+        const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
+        await this._playAudioForAction(action, type, uid, audioPlayCount);
+      }
     }
 
     if (queued > 0) {
