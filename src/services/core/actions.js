@@ -189,13 +189,35 @@ class ActionsService {
       source: String(payload.source || 'event').trim() || 'event',
       type: String(payload.type || 'event').trim() || 'event',
       actionName: String(payload.actionName || '').trim(),
+      triggeredBy: String(payload.triggeredBy || '').trim(),
       mode: String(payload.mode || 'direct').trim() || 'direct',
       comboIterations: Math.max(1, Number.parseInt(payload.comboIterations, 10) || 1),
+      totalCommands: Math.max(0, Number.parseInt(payload.totalCommands, 10) || 0),
+      totalIterations: Math.max(1, Number.parseInt(payload.totalIterations, 10) || 1),
+      progress: {
+        completedCommands: 0,
+        totalCommands: Math.max(0, Number.parseInt(payload.totalCommands, 10) || 0),
+        completedIterations: 0,
+        totalIterations: Math.max(1, Number.parseInt(payload.totalIterations, 10) || 1)
+      },
       startedAt: Date.now(),
       status: 'running'
     };
 
     executionList.set(executionId, entry);
+    return entry;
+  }
+
+  _updateExecution(userId, executionId, updates = {}) {
+    const uid = this.normalizeUserId(userId);
+    const executionList = this.activeExecutions.get(uid);
+    if (!executionList) return null;
+
+    const id = String(executionId || '').trim();
+    if (!id || !executionList.has(id)) return null;
+
+    const entry = executionList.get(id);
+    Object.assign(entry, updates);
     return entry;
   }
 
@@ -287,6 +309,8 @@ class ActionsService {
     const execution = this._registerExecution(uid, {
       source: options?.source || 'event',
       type,
+      actionName: options?.actionName || '',
+      triggeredBy: options?.triggeredBy || (options?.source?.startsWith('manual-test') ? 'Manual test' : (data.nickname || data.username || 'TikTok')),
       mode: options?.parallel ? 'parallel' : 'serial'
     });
     let executed = 0;
@@ -400,6 +424,10 @@ class ActionsService {
 
         if (!commands.length) continue;
 
+        const resolvedActionName = String(action.name || action.trigger || type).trim() || type;
+        execution.actionName = execution.actionName || resolvedActionName;
+        execution.triggeredBy = execution.triggeredBy || String(data.nickname || data.username || 'TikTok').trim() || 'TikTok';
+
         const sourceName =
           action.name ||
           `${type}-${data.giftname || String(data.comment || "").slice(0, 10) || "event"}-u${uid}`;
@@ -420,6 +448,22 @@ class ActionsService {
           isCombo = true;
           comboIterations = actionRepeatMultiplier;
         }
+
+        const totalIterations = isCombo ? comboIterations : 1;
+        const totalCommands = commands.length * totalIterations;
+        this._updateExecution(uid, execution.id, {
+          actionName: execution.actionName || resolvedActionName,
+          triggeredBy: execution.triggeredBy,
+          comboIterations,
+          totalCommands,
+          totalIterations,
+          progress: {
+            completedCommands: 0,
+            totalCommands,
+            completedIterations: 0,
+            totalIterations
+          }
+        });
 
         // Determinar si encolamos o ejecutamos directo
         // En combos intentamos ejecución directa, pero si RCON no está, igual encolamos
@@ -470,6 +514,16 @@ class ActionsService {
                 await rconService.send(cmd, uid);
                 executed++;
 
+                this._updateExecution(uid, execution.id, {
+                  progress: {
+                    ...(execution.progress || {}),
+                    completedCommands: executed,
+                    totalCommands,
+                    completedIterations: iter,
+                    totalIterations
+                  }
+                });
+
                 if (i < commands.length - 1) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
                 }
@@ -490,6 +544,16 @@ class ActionsService {
                 waitForFinish: true
               });
             }
+
+            this._updateExecution(uid, execution.id, {
+              progress: {
+                ...(execution.progress || {}),
+                completedCommands: executed,
+                totalCommands,
+                completedIterations: iter + 1,
+                totalIterations
+              }
+            });
 
             // Pequeño delay entre iteraciones
             if (iter < comboIterations - 1) {
@@ -521,6 +585,16 @@ class ActionsService {
 
                 await rconService.send(cmd, uid);
                 executed++;
+
+                this._updateExecution(uid, execution.id, {
+                  progress: {
+                    ...(execution.progress || {}),
+                    completedCommands: executed,
+                    totalCommands,
+                    completedIterations: 1,
+                    totalIterations: 1
+                  }
+                });
 
                 if (i < commands.length - 1) {
                   await new Promise((resolve) => setTimeout(resolve, 100));

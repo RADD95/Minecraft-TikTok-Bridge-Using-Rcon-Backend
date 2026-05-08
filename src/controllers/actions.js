@@ -243,6 +243,7 @@ module.exports = {
               onlyActionIndex: index,
               source: `manual-test-${iteration + 1}`,
               actionName: action.name || action.trigger || type,
+              triggeredBy: 'Manual test',
               parallel: true
             })
           );
@@ -259,6 +260,7 @@ module.exports = {
           onlyActionIndex: index,
           source: 'manual-test',
           actionName: action.name || action.trigger || type,
+          triggeredBy: 'Manual test',
           parallel: true
         });
       }
