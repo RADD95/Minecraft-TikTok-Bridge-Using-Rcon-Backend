@@ -4,8 +4,6 @@ const path = require('path');
 const storage = require('../services/infra/storage');
 const logger = require('../utils/logger');
 const actionsService = require('../services/core/actions');
-const queue = require('../services/core/queue');
-const rconService = require('../services/infra/rcon');
 
 const CACHE_DIR = path.join(process.cwd(), 'data', 'cache');
 
@@ -37,10 +35,11 @@ function cleanupOrphanAudioAsset(assetPath, allActions = []) {
   }
 }
 
-function buildDefaultTestData(action = {}) {
+function buildDefaultTestData(action = {}, options = {}) {
   const type = String(action.type || 'gift').toLowerCase();
   const trigger = String(action.trigger || '').trim();
   const now = Date.now();
+  const comboMultiplier = Math.max(1, Number.parseInt(options.comboMultiplier, 10) || 1);
 
   const base = {
     username: 'test_user',
@@ -59,13 +58,14 @@ function buildDefaultTestData(action = {}) {
 
   if (type === 'like') {
     const triggerLikes = Number.parseInt(trigger, 10);
-    const likes = Number.isFinite(triggerLikes) && triggerLikes > 0 ? triggerLikes : 10;
+    const likesPerEvent = Number.isFinite(triggerLikes) && triggerLikes > 0 ? triggerLikes : 10;
+    const likes = likesPerEvent * comboMultiplier;
     base.likecount = likes;
   }
 
   if (type === 'gift') {
     base.giftname = trigger || 'Rose';
-    base.repeatcount = 1;
+    base.repeatcount = comboMultiplier;
     base.diamondCount = 1;
   }
 
@@ -204,6 +204,8 @@ module.exports = {
 
       const action = actions[index] || {};
       const type = String(action.type || 'gift').toLowerCase();
+      const isComboTest = !!req.body?.combo;
+      const comboMultiplier = isComboTest ? 10 : 1;
 
       if (!action.command || !String(action.command).trim()) {
         return res.status(400).json({
@@ -212,60 +214,30 @@ module.exports = {
         });
       }
 
-      const payload = buildDefaultTestData(action);
-      const parsedCommand = actionsService.parseCommand(action.command, payload, userId);
-      let commands = actionsService.splitCommands(parsedCommand);
+      const payload = buildDefaultTestData(action, { comboMultiplier });
+      payload.platform = 'tiktok';
 
-      if (!commands.length) {
+      const estimatedBaseCommands = actionsService.splitCommands(
+        actionsService.parseCommand(action.command, payload, userId)
+      );
+
+      if (!estimatedBaseCommands.length) {
         return res.status(400).json({
           success: false,
           error: 'No se pudieron generar comandos válidos para la prueba'
         });
       }
 
-      if (type === 'gift' && action.repeatPerUnit) {
-        const repeat = Number.parseInt(payload.repeatcount, 10) || 1;
-        if (repeat > 1) {
-          const expanded = [];
-          for (let i = 0; i < repeat; i++) {
-            expanded.push(...commands);
-          }
-          commands = expanded;
-        }
-      }
+      const runtimeResult = await actionsService.handleEvent(type, payload, userId, {
+        onlyActionIndex: index,
+        source: 'manual-test'
+      });
 
-      const sourceName = action.name || `${type}-manual-test-${index}`;
-      const shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(userId);
+      const estimatedMultiplier = type === 'gift' && action.repeatPerUnit
+        ? Number.parseInt(payload.repeatcount, 10) || 1
+        : 1;
 
-      let executed = 0;
-      let queued = 0;
-
-      if (shouldQueue) {
-        queue.add(commands, `${sourceName} [manual-test]`, userId);
-        queued = 1;
-      } else {
-        for (let i = 0; i < commands.length; i++) {
-          await rconService.send(commands[i], userId);
-          executed++;
-
-          if (i < commands.length - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-        }
-      }
-
-      // Also attempt to enqueue/play audio for the action as a real event would
-      try {
-        const audioPlayCount = typeof actionsService._getAudioPlayCount === 'function'
-          ? actionsService._getAudioPlayCount(type, payload, action, 1)
-          : 1;
-
-        if (typeof actionsService._playAudioForAction === 'function') {
-          await actionsService._playAudioForAction(action, type, userId, audioPlayCount);
-        }
-      } catch (e) {
-        logger.warn(`No se pudo reproducir audio durante la prueba de acción #${index}: ${e?.message || e}`);
-      }
+      const estimatedCommands = estimatedBaseCommands.length * Math.max(1, estimatedMultiplier);
 
       logger.info(`▶️ Test manual de acción #${index} para usuario #${userId}`);
 
@@ -274,9 +246,11 @@ module.exports = {
         message: 'Prueba ejecutada',
         actionIndex: index,
         type,
-        executed,
-        queued,
-        commands,
+        mode: isComboTest ? 'combo-x10' : 'single',
+        comboMultiplier,
+        executed: Number(runtimeResult?.executed || 0),
+        queued: Number(runtimeResult?.queued || 0),
+        estimatedCommands,
         payload
       });
     } catch (error) {

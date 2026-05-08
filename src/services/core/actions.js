@@ -213,11 +213,13 @@ class ActionsService {
     };
   }
 
-  async _handleEvent(type, data = {}, userId = DEFAULT_USER_ID) {
+  async _handleEvent(type, data = {}, userId = DEFAULT_USER_ID, options = {}) {
     const uid = this.normalizeUserId(userId);
     const actions = storage.loadActions(uid) || [];
     let executed = 0;
     let queued = 0;
+    const onlyActionIndex = Number.parseInt(options?.onlyActionIndex, 10);
+    const hasOnlyActionIndex = Number.isInteger(onlyActionIndex) && onlyActionIndex >= 0;
 
     const stats = statsService.increment(type, data, uid);
 
@@ -269,7 +271,10 @@ class ActionsService {
       );
     }
 
-    for (const action of actions) {
+    for (let actionIndex = 0; actionIndex < actions.length; actionIndex++) {
+      const action = actions[actionIndex];
+
+      if (hasOnlyActionIndex && actionIndex !== onlyActionIndex) continue;
       if (action.enabled === false) continue;
       if (action.type !== type) continue;
 
@@ -356,9 +361,6 @@ class ActionsService {
         }
       }
 
-      const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
-      await this._playAudioForAction(action, type, uid, audioPlayCount);
-
         const shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
 
         const sourceName =
@@ -420,6 +422,9 @@ class ActionsService {
             }
           }
         }
+
+      const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
+      await this._playAudioForAction(action, type, uid, audioPlayCount);
     }
 
     if (queued > 0) {
@@ -439,13 +444,13 @@ class ActionsService {
     };
   }
 
-  async handleEvent(type, data = {}, userId = DEFAULT_USER_ID) {
+  async handleEvent(type, data = {}, userId = DEFAULT_USER_ID, options = {}) {
     const uid = this.normalizeUserId(userId);
     const previousChain = this.userEventChains.get(uid) || Promise.resolve();
 
     const nextChain = previousChain
       .catch(() => undefined)
-      .then(() => this._handleEvent(type, data, uid));
+      .then(() => this._handleEvent(type, data, uid, options));
 
     this.userEventChains.set(uid, nextChain);
 

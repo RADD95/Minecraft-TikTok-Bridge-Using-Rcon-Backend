@@ -147,9 +147,15 @@ function initDb() {
 
   addColumnIfMissing('audio_wait_for_finish', 'audio_wait_for_finish INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('audio_replace_current', 'audio_replace_current INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('audio_play_once_per_combo', 'audio_play_once_per_combo INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing('audio_play_once_per_combo', 'audio_play_once_per_combo INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('minecraft_version', "minecraft_version TEXT DEFAULT ''");
   addColumnIfMissing('folder', "folder TEXT DEFAULT ''");
+
+  db.exec(`
+    UPDATE actions
+    SET audio_play_once_per_combo = 0
+    WHERE audio_play_once_per_combo IS NULL OR audio_play_once_per_combo <> 0
+  `);
 }
 
 function getDb() {

@@ -543,6 +543,8 @@ const onNewLog = (newLog) => {
       volume: payload?.volume != null ? payload.volume : payload?.vol || null,
       actionName: payload?.actionName || payload?.title || null,
       eventType: payload?.eventType || null,
+      waitForFinish: !!payload?.waitForFinish,
+      replaceCurrent: !!payload?.replaceCurrent,
       createdAt: payload?.createdAt || Date.now()
     };
 

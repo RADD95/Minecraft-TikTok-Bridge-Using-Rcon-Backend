@@ -8,6 +8,8 @@ class AudioService extends EventEmitter {
     super();
     this.pendingCues = new Map();
     this.cueIndex = new Map();
+    this.userQueues = new Map();
+    this.activeCueByUser = new Map();
   }
 
   normalizeUserId(userId) {
@@ -35,12 +37,13 @@ class AudioService extends EventEmitter {
   _emitState(userId = DEFAULT_USER_ID, reason = "update") {
     const uid = this.normalizeUserId(userId);
     const pending = Array.from(this.pendingCues.values()).filter((item) => String(item.userId) === String(uid)).length;
+    const currentCueId = this.activeCueByUser.get(uid) || null;
 
     this.emit("state", {
       userId: uid,
       reason,
       pending,
-      currentCueId: null
+      currentCueId
     });
   }
 
@@ -53,14 +56,82 @@ class AudioService extends EventEmitter {
       reject = rej;
     });
 
-    const timeoutHandle = setTimeout(() => {
-      this.finishCue(cue.id, {
-        status: "timeout",
-        reason: "ack-timeout"
-      });
-    }, cue.timeoutMs);
+    return { promise, resolve, reject, timeoutHandle: null };
+  }
 
-    return { promise, resolve, reject, timeoutHandle };
+  _getQueue(userId) {
+    const uid = this.normalizeUserId(userId);
+    if (!this.userQueues.has(uid)) {
+      this.userQueues.set(uid, []);
+    }
+
+    return this.userQueues.get(uid);
+  }
+
+  _startCue(entry) {
+    if (!entry?.cue) return;
+
+    const cue = entry.cue;
+    entry.startedAt = Date.now();
+
+    if (entry.waiter) {
+      entry.waiter.timeoutHandle = setTimeout(() => {
+        this.finishCue(cue.id, {
+          status: "timeout",
+          reason: "ack-timeout"
+        });
+      }, cue.timeoutMs);
+    }
+
+    this.emit("cue", cue);
+    this._emitState(cue.userId, "cue-start");
+  }
+
+  _pumpUserQueue(userId) {
+    const uid = this.normalizeUserId(userId);
+
+    if (this.activeCueByUser.has(uid)) {
+      return;
+    }
+
+    const queue = this._getQueue(uid);
+    while (queue.length > 0) {
+      const nextCueId = queue.shift();
+      const entry = this.pendingCues.get(nextCueId);
+
+      if (!entry) continue;
+
+      this.activeCueByUser.set(uid, nextCueId);
+      this._startCue(entry);
+      return;
+    }
+
+    this.activeCueByUser.delete(uid);
+    this._emitState(uid, "idle");
+  }
+
+  _replacePendingForUser(userId, keepCueId = null) {
+    const uid = this.normalizeUserId(userId);
+    const activeCueId = this.activeCueByUser.get(uid);
+
+    if (activeCueId && activeCueId !== keepCueId) {
+      this.finishCue(activeCueId, {
+        status: "stopped",
+        reason: "replaced-by-new"
+      });
+    }
+
+    const queue = this._getQueue(uid);
+    const queuedIds = [...queue];
+    queue.length = 0;
+
+    for (const queuedCueId of queuedIds) {
+      if (queuedCueId === keepCueId) continue;
+      this.finishCue(queuedCueId, {
+        status: "stopped",
+        reason: "replaced-by-new"
+      });
+    }
   }
 
   async enqueue(payload = {}) {
@@ -79,13 +150,17 @@ class AudioService extends EventEmitter {
     this.pendingCues.set(cue.id, {
       cue,
       waiter,
-      startedAt: Date.now()
+      startedAt: null
     });
 
     this.cueIndex.set(cue.id, cue.userId);
 
-    this.emit("cue", cue);
-    this._emitState(cue.userId, "cue-start");
+    if (cue.replaceCurrent) {
+      this._replacePendingForUser(cue.userId, cue.id);
+    }
+
+    this._getQueue(cue.userId).push(cue.id);
+    this._pumpUserQueue(cue.userId);
 
     if (!cue.waitForFinish) {
       return {
@@ -116,7 +191,7 @@ class AudioService extends EventEmitter {
       clearTimeout(entry.waiter.timeoutHandle);
     }
 
-    const durationMs = Date.now() - (entry.startedAt || Date.now());
+    const durationMs = entry.startedAt ? Date.now() - entry.startedAt : 0;
     const cue = entry.cue;
 
     if (entry.waiter?.resolve) {
@@ -137,9 +212,32 @@ class AudioService extends EventEmitter {
       cue
     });
 
+    this.emit("stop", {
+      userId: uid,
+      cueId: id,
+      status: payload.status || "finished",
+      reason: payload.reason || null,
+      durationMs,
+      cue
+    });
+
     this.pendingCues.delete(id);
     this.cueIndex.delete(id);
-    this._emitState(uid, "cue-finished");
+
+    const queue = this.userQueues.get(uid);
+    if (Array.isArray(queue) && queue.length > 0) {
+      this.userQueues.set(
+        uid,
+        queue.filter((queuedId) => queuedId !== id)
+      );
+    }
+
+    if (this.activeCueByUser.get(uid) === id) {
+      this.activeCueByUser.delete(uid);
+      this._pumpUserQueue(uid);
+    } else {
+      this._emitState(uid, "cue-finished");
+    }
 
     return {
       success: true,
