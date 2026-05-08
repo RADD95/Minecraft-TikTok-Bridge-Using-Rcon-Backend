@@ -1,39 +1,11 @@
 // src/controllers/actions.js - Controlador para manejar acciones por usuario autenticado
-const fs = require('fs');
-const path = require('path');
 const storage = require('../services/infra/storage');
+const { getDb } = require('../services/infra/db');
+const { cleanupOrphanAudioAsset } = require('../services/infra/cache-assets');
 const logger = require('../utils/logger');
 const actionsService = require('../services/core/actions');
 
-const CACHE_DIR = path.join(process.cwd(), 'data', 'cache');
-
-function isManagedAudioAsset(assetPath) {
-  const value = String(assetPath || '').trim();
-  return value.startsWith('/cache/audio_');
-}
-
-function cleanupOrphanAudioAsset(assetPath, allActions = []) {
-  if (!isManagedAudioAsset(assetPath)) return;
-
-  const stillReferenced = (Array.isArray(allActions) ? allActions : [])
-    .some((action) => String(action?.audioAsset || '').trim() === String(assetPath || '').trim());
-
-  if (stillReferenced) return;
-
-  const baseName = path.basename(String(assetPath || '').replace(/^\/cache\//, ''));
-  if (!baseName || baseName === '.' || baseName === '..') return;
-
-  const abs = path.join(CACHE_DIR, baseName);
-  if (!abs.startsWith(CACHE_DIR)) return;
-
-  try {
-    if (fs.existsSync(abs)) {
-      fs.unlinkSync(abs);
-    }
-  } catch (err) {
-    logger.warn(`No se pudo borrar audio huerfano ${baseName}: ${err?.message || err}`);
-  }
-}
+const db = getDb();
 
 function buildDefaultTestData(action = {}, options = {}) {
   const type = String(action.type || 'gift').toLowerCase();
@@ -135,7 +107,7 @@ module.exports = {
       };
 
       const saved = storage.saveActions(actions, userId);
-      cleanupOrphanAudioAsset(previousAsset, saved);
+      cleanupOrphanAudioAsset(db, previousAsset);
 
       logger.info(`✏️ Acción actualizada para usuario #${userId}, índice ${index}`);
 
@@ -170,7 +142,7 @@ module.exports = {
       actions.splice(index, 1);
 
       const saved = storage.saveActions(actions, userId);
-      cleanupOrphanAudioAsset(removed?.audioAsset || '', saved);
+      cleanupOrphanAudioAsset(db, removed?.audioAsset || '');
 
       logger.info(`🗑️ Acción eliminada para usuario #${userId}, índice ${index}`);
 

@@ -1,6 +1,10 @@
 // src/controllers/overlays.js
+const { getDb } = require('../services/infra/db');
+const { cleanupRemovedOverlayAssets, getOverlayImageAssetPaths, cleanupOrphanImageAsset } = require('../services/infra/cache-assets');
 const storage = require('../services/infra/storage');
 const logger = require('../utils/logger');
+
+const db = getDb();
 
 function normalizeId(raw) {
   return String(raw || '').trim();
@@ -113,6 +117,7 @@ module.exports = {
 
       const overlays = storage.loadOverlays(userId);
       const idx = overlays.findIndex(o => normalizeId(o.id) === id);
+      const previousOverlay = idx >= 0 ? overlays[idx] : null;
 
       if (idx >= 0) {
         overlays[idx] = {
@@ -124,6 +129,7 @@ module.exports = {
       }
 
       storage.saveOverlays(overlays, userId);
+      cleanupRemovedOverlayAssets(db, previousOverlay, normalizedOverlay);
 
       logger.info(`🖼️ Overlay guardado para usuario #${userId}: ${id}`);
 
@@ -155,8 +161,13 @@ module.exports = {
         });
       }
 
+      const removed = overlays[idx];
       overlays.splice(idx, 1);
       storage.saveOverlays(overlays, userId);
+
+      for (const assetPath of getOverlayImageAssetPaths(removed)) {
+        cleanupOrphanImageAsset(db, assetPath);
+      }
 
       logger.info(`🗑️ Overlay eliminado para usuario #${userId}: ${id}`);
 

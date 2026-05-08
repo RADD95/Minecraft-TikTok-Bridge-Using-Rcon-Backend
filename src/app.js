@@ -41,6 +41,8 @@ const { requireAdmin } = require("./middleware/admin");
 const app = express();
 const PORT = Number(process.env.PORT || 4567);
 const CACHE_DIR = path.join(process.cwd(), "data", "cache");
+const AUDIO_CACHE_DIR = path.join(CACHE_DIR, "audio");
+const IMAGE_CACHE_DIR = path.join(CACHE_DIR, "img");
 const CORS_ORIGIN_RAW = String(process.env.CORS_ORIGIN || "").trim();
 
 const allowedCorsOrigins = CORS_ORIGIN_RAW
@@ -64,6 +66,14 @@ if (allowedCorsOrigins.length > 0) {
 
 if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(AUDIO_CACHE_DIR)) {
+  fs.mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(IMAGE_CACHE_DIR)) {
+  fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true });
 }
 
 app.use(cors(corsOptions));
@@ -663,8 +673,8 @@ app.post("/api/cache-audio", requireAuth, async (req, res) => {
       : (mimeToExt[mimeType] && allowed.has(mimeToExt[mimeType]) ? mimeToExt[mimeType] : ".mp3");
 
     const hash = crypto.createHash("sha1").update(buf).digest("hex");
-    const fileName = `audio_${hash}${ext}`;
-    const filePath = path.join(CACHE_DIR, fileName);
+    const fileName = `${hash}${ext}`;
+    const filePath = path.join(AUDIO_CACHE_DIR, fileName);
 
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, buf);
@@ -672,7 +682,7 @@ app.post("/api/cache-audio", requireAuth, async (req, res) => {
 
     return res.json({
       success: true,
-      cachedUrl: `/cache/${fileName}`
+      cachedUrl: `/cache/audio/${fileName}`
     });
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || String(e) });
@@ -693,7 +703,7 @@ app.post("/api/cache-image", requireAuth, async (req, res) => {
     const ext = extFromUrl.toLowerCase().split("?")[0] || ".png";
 
     const fileName = `${hash}${ext}`;
-    const filePath = path.join(CACHE_DIR, fileName);
+    const filePath = path.join(IMAGE_CACHE_DIR, fileName);
 
     if (!fs.existsSync(filePath)) {
       const resp = await fetch(url);
@@ -708,7 +718,7 @@ app.post("/api/cache-image", requireAuth, async (req, res) => {
 
     return res.json({
       success: true,
-      cachedUrl: `/cache/${fileName}`
+      cachedUrl: `/cache/img/${fileName}`
     });
   } catch (e) {
     console.error("Error cacheando imagen", e);

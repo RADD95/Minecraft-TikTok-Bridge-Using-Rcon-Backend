@@ -116,6 +116,12 @@ function initDb() {
       command TEXT NOT NULL,
       use_queue INTEGER NOT NULL DEFAULT 0,
       repeat_per_unit INTEGER NOT NULL DEFAULT 0,
+      audio_enabled INTEGER NOT NULL DEFAULT 0,
+      audio_asset TEXT NOT NULL DEFAULT '',
+      audio_volume INTEGER NOT NULL DEFAULT 70,
+      audio_wait_for_finish INTEGER NOT NULL DEFAULT 0,
+      audio_replace_current INTEGER NOT NULL DEFAULT 0,
+      audio_play_once_per_combo INTEGER NOT NULL DEFAULT 1,
       minecraft_version TEXT NOT NULL DEFAULT '1.20',
       imports_count INTEGER NOT NULL DEFAULT 0,
       is_public INTEGER NOT NULL DEFAULT 1,
@@ -150,6 +156,23 @@ function initDb() {
   addColumnIfMissing('audio_play_once_per_combo', 'audio_play_once_per_combo INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('minecraft_version', "minecraft_version TEXT DEFAULT ''");
   addColumnIfMissing('folder', "folder TEXT DEFAULT ''");
+
+  const galleryColumns = new Set(
+    db.prepare(`PRAGMA table_info(gallery_actions)`).all().map((column) => column.name)
+  );
+
+  const addGalleryColumnIfMissing = (columnName, definition) => {
+    if (galleryColumns.has(columnName)) return;
+    db.exec(`ALTER TABLE gallery_actions ADD COLUMN ${definition}`);
+    galleryColumns.add(columnName);
+  };
+
+  addGalleryColumnIfMissing('audio_enabled', 'audio_enabled INTEGER NOT NULL DEFAULT 0');
+  addGalleryColumnIfMissing('audio_asset', "audio_asset TEXT NOT NULL DEFAULT ''");
+  addGalleryColumnIfMissing('audio_volume', 'audio_volume INTEGER NOT NULL DEFAULT 70');
+  addGalleryColumnIfMissing('audio_wait_for_finish', 'audio_wait_for_finish INTEGER NOT NULL DEFAULT 0');
+  addGalleryColumnIfMissing('audio_replace_current', 'audio_replace_current INTEGER NOT NULL DEFAULT 0');
+  addGalleryColumnIfMissing('audio_play_once_per_combo', 'audio_play_once_per_combo INTEGER NOT NULL DEFAULT 1');
 
   db.exec(`
     UPDATE actions

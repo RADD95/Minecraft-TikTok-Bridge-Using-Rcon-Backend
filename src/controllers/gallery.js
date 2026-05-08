@@ -1,5 +1,6 @@
 // src/controllers/gallery.js - Controlador para galeria publica de acciones
 const { getDb } = require("../services/infra/db");
+const { normalizeGalleryAudioPayload, cleanupOrphanAudioAsset } = require("../services/infra/cache-assets");
 const storage = require("../services/infra/storage");
 const logger = require("../utils/logger");
 
@@ -50,6 +51,12 @@ function normalizeGalleryAction(row, currentUser) {
     command: row.command || "",
     useQueue: !!row.use_queue,
     repeatPerUnit: !!row.repeat_per_unit,
+    audioEnabled: !!row.audio_enabled,
+    audioAsset: row.audio_asset || "",
+    audioVolume: Number(row.audio_volume || 70),
+    audioWaitForFinish: !!row.audio_wait_for_finish,
+    audioReplaceCurrent: !!row.audio_replace_current,
+    audioPlayOncePerCombo: row.audio_play_once_per_combo !== 0,
     minecraftVersion: row.minecraft_version || "1.20",
     importsCount: Number(row.imports_count || 0),
     isPublic: row.is_public !== 0,
@@ -146,6 +153,7 @@ module.exports = {
       }
 
       const tags = normalizeTags(body.tags);
+      const audio = normalizeGalleryAudioPayload(action);
 
       const info = db.prepare(`
         INSERT INTO gallery_actions (
@@ -159,10 +167,16 @@ module.exports = {
           command,
           use_queue,
           repeat_per_unit,
+          audio_enabled,
+          audio_asset,
+          audio_volume,
+          audio_wait_for_finish,
+          audio_replace_current,
+          audio_play_once_per_combo,
           minecraft_version,
           is_public,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
       `).run(
         userId,
         title,
@@ -174,6 +188,12 @@ module.exports = {
         command,
         action.useQueue ? 1 : 0,
         action.repeatPerUnit ? 1 : 0,
+        audio.audioEnabled ? 1 : 0,
+        audio.audioAsset,
+        audio.audioVolume,
+        audio.audioWaitForFinish ? 1 : 0,
+        audio.audioReplaceCurrent ? 1 : 0,
+        audio.audioPlayOncePerCombo ? 1 : 0,
         minecraftVersion
       );
 
@@ -235,6 +255,27 @@ module.exports = {
       const useQueue = !!body.useQueue;
       const repeatPerUnit = !!body.repeatPerUnit;
       const tags = normalizeTags(body.tags);
+      const hasAudioPayload = [
+        "audioEnabled",
+        "audioAsset",
+        "audioVolume",
+        "audioWaitForFinish",
+        "audioReplaceCurrent",
+        "audioPlayOncePerCombo"
+      ].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+
+      const audio = hasAudioPayload
+        ? normalizeGalleryAudioPayload(body)
+        : {
+            audioEnabled: !!row.audio_enabled,
+            audioAsset: String(row.audio_asset || ""),
+            audioVolume: Number.parseInt(row.audio_volume, 10) || 70,
+            audioWaitForFinish: !!row.audio_wait_for_finish,
+            audioReplaceCurrent: !!row.audio_replace_current,
+            audioPlayOncePerCombo: row.audio_play_once_per_combo !== 0
+          };
+
+      const previousAudioAsset = String(row.audio_asset || "").trim();
 
       if (!title) {
         return res.status(400).json({ success: false, error: "Titulo requerido" });
@@ -266,6 +307,12 @@ module.exports = {
           command = ?,
           use_queue = ?,
           repeat_per_unit = ?,
+          audio_enabled = ?,
+          audio_asset = ?,
+          audio_volume = ?,
+          audio_wait_for_finish = ?,
+          audio_replace_current = ?,
+          audio_play_once_per_combo = ?,
           minecraft_version = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -276,9 +323,19 @@ module.exports = {
         command,
         useQueue ? 1 : 0,
         repeatPerUnit ? 1 : 0,
+        audio.audioEnabled ? 1 : 0,
+        audio.audioAsset,
+        audio.audioVolume,
+        audio.audioWaitForFinish ? 1 : 0,
+        audio.audioReplaceCurrent ? 1 : 0,
+        audio.audioPlayOncePerCombo ? 1 : 0,
         minecraftVersion,
         galleryId
       );
+
+      if (previousAudioAsset && previousAudioAsset !== String(audio.audioAsset || "").trim()) {
+        cleanupOrphanAudioAsset(db, previousAudioAsset);
+      }
 
       const updatedRow = db.prepare(`
         SELECT ga.*, u.username as author_username
@@ -338,6 +395,12 @@ module.exports = {
         command: row.command || "",
         useQueue: !!row.use_queue,
         repeatPerUnit: !!row.repeat_per_unit,
+        audioEnabled: !!row.audio_enabled,
+        audioAsset: row.audio_asset || "",
+        audioVolume: Number(row.audio_volume || 70),
+        audioWaitForFinish: !!row.audio_wait_for_finish,
+        audioReplaceCurrent: !!row.audio_replace_current,
+        audioPlayOncePerCombo: row.audio_play_once_per_combo !== 0,
         enabled: true,
         minecraftVersion: row.minecraft_version || "",
         folder: folderName
@@ -396,7 +459,10 @@ module.exports = {
         return res.status(403).json({ success: false, error: "No tienes permiso para borrar esta accion" });
       }
 
+      const removedAudioAsset = String(row.audio_asset || "").trim();
+
       db.prepare(`DELETE FROM gallery_actions WHERE id = ?`).run(galleryId);
+      cleanupOrphanAudioAsset(db, removedAudioAsset);
 
       logger.warn(`🗑️ Accion de galeria #${galleryId} borrada por usuario #${userId} (${isAdmin ? "admin" : "owner"})`);
 
