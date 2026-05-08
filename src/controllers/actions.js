@@ -206,6 +206,7 @@ module.exports = {
       const type = String(action.type || 'gift').toLowerCase();
       const isComboTest = !!req.body?.combo;
       const comboMultiplier = isComboTest ? 10 : 1;
+      const comboEventCount = isComboTest && type === 'comment' ? 10 : 1;
 
       if (!action.command || !String(action.command).trim()) {
         return res.status(400).json({
@@ -228,13 +229,42 @@ module.exports = {
         });
       }
 
-      const runtimeResult = await actionsService.handleEvent(type, payload, userId, {
-        onlyActionIndex: index,
-        source: 'manual-test'
-      });
+      let runtimeResult;
+
+      if (comboEventCount > 1) {
+        const testRuns = [];
+
+        for (let iteration = 0; iteration < comboEventCount; iteration++) {
+          testRuns.push(
+            actionsService.handleEvent(type, {
+              ...payload,
+              eventId: `${payload.eventId}-${iteration + 1}`
+            }, userId, {
+              onlyActionIndex: index,
+              source: `manual-test-${iteration + 1}`,
+              parallel: true
+            })
+          );
+        }
+
+        const results = await Promise.all(testRuns);
+        runtimeResult = results.reduce((acc, result) => {
+          acc.executed += Number(result?.executed || 0);
+          acc.queued += Number(result?.queued || 0);
+          return acc;
+        }, { executed: 0, queued: 0 });
+      } else {
+        runtimeResult = await actionsService.handleEvent(type, payload, userId, {
+          onlyActionIndex: index,
+          source: 'manual-test',
+          parallel: true
+        });
+      }
 
       const estimatedMultiplier = type === 'gift' && action.repeatPerUnit
         ? Number.parseInt(payload.repeatcount, 10) || 1
+        : isComboTest && type === 'comment'
+          ? comboEventCount
         : 1;
 
       const estimatedCommands = estimatedBaseCommands.length * Math.max(1, estimatedMultiplier);

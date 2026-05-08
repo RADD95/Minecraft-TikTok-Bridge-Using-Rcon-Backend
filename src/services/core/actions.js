@@ -11,6 +11,7 @@ const DEFAULT_USER_ID = 1;
 class ActionsService {
   constructor() {
     this.userEventChains = new Map();
+    this.activeExecutions = new Map();
   }
 
   normalizeUserId(userId) {
@@ -168,14 +169,81 @@ class ActionsService {
     return 1;
   }
 
-  async _playAudioForAction(action, type, uid, count = 1) {
+  _getExecutionList(userId) {
+    const uid = this.normalizeUserId(userId);
+
+    if (!this.activeExecutions.has(uid)) {
+      this.activeExecutions.set(uid, new Map());
+    }
+
+    return this.activeExecutions.get(uid);
+  }
+
+  _registerExecution(userId, payload = {}) {
+    const uid = this.normalizeUserId(userId);
+    const executionList = this._getExecutionList(uid);
+    const executionId = `exec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const entry = {
+      id: executionId,
+      userId: uid,
+      source: String(payload.source || 'event').trim() || 'event',
+      type: String(payload.type || 'event').trim() || 'event',
+      actionName: String(payload.actionName || '').trim(),
+      mode: String(payload.mode || 'direct').trim() || 'direct',
+      comboIterations: Math.max(1, Number.parseInt(payload.comboIterations, 10) || 1),
+      startedAt: Date.now(),
+      status: 'running'
+    };
+
+    executionList.set(executionId, entry);
+    return entry;
+  }
+
+  _finishExecution(userId, executionId, payload = {}) {
+    const uid = this.normalizeUserId(userId);
+    const executionList = this.activeExecutions.get(uid);
+    if (!executionList) return null;
+
+    const id = String(executionId || '').trim();
+    if (!id || !executionList.has(id)) return null;
+
+    const entry = executionList.get(id);
+    entry.status = String(payload.status || 'finished').trim() || 'finished';
+    entry.finishedAt = Date.now();
+    entry.durationMs = entry.startedAt ? entry.finishedAt - entry.startedAt : 0;
+
+    if (payload.executed != null) entry.executed = Number(payload.executed || 0);
+    if (payload.queued != null) entry.queued = Number(payload.queued || 0);
+    if (payload.detail) entry.detail = String(payload.detail);
+
+    executionList.delete(id);
+
+    if (executionList.size === 0) {
+      this.activeExecutions.delete(uid);
+    }
+
+    return entry;
+  }
+
+  getActiveExecutions(userId = DEFAULT_USER_ID) {
+    const uid = this.normalizeUserId(userId);
+    const executionList = this.activeExecutions.get(uid);
+
+    return Array.isArray(executionList)
+      ? executionList
+      : Array.from(executionList?.values?.() || []).map((entry) => ({
+          ...entry
+        }));
+  }
+
+  async _playAudioForAction(action, type, uid, count = 1, options = {}) {
     if (!action?.audioEnabled) return { triggered: 0, skipped: true };
 
     const asset = String(action.audioAsset || "").trim();
     if (!asset) return { triggered: 0, skipped: true };
 
     const planned = Math.max(1, Number.parseInt(count, 10) || 1);
-    const waitForFinish = !!action.audioWaitForFinish;
+    const waitForFinish = options.waitForFinish ?? !!action.audioWaitForFinish;
     const replaceCurrent = !!action.audioReplaceCurrent;
     // Si audioPlayOncePerCombo es true, reproducir solo 1 vez. Si es false, reproducir 'planned' veces
     const repeatCount = action.audioPlayOncePerCombo !== false ? 1 : planned;
@@ -216,6 +284,11 @@ class ActionsService {
   async _handleEvent(type, data = {}, userId = DEFAULT_USER_ID, options = {}) {
     const uid = this.normalizeUserId(userId);
     const actions = storage.loadActions(uid) || [];
+    const execution = this._registerExecution(uid, {
+      source: options?.source || 'event',
+      type,
+      mode: options?.parallel ? 'parallel' : 'serial'
+    });
     let executed = 0;
     let queued = 0;
     const onlyActionIndex = Number.parseInt(options?.onlyActionIndex, 10);
@@ -271,111 +344,119 @@ class ActionsService {
       );
     }
 
-    for (let actionIndex = 0; actionIndex < actions.length; actionIndex++) {
-      const action = actions[actionIndex];
+    try {
+      for (let actionIndex = 0; actionIndex < actions.length; actionIndex++) {
+        const action = actions[actionIndex];
 
-      if (hasOnlyActionIndex && actionIndex !== onlyActionIndex) continue;
-      if (action.enabled === false) continue;
-      if (action.type !== type) continue;
+        if (hasOnlyActionIndex && actionIndex !== onlyActionIndex) continue;
+        if (action.enabled === false) continue;
+        if (action.type !== type) continue;
 
-      if (type === "gift" && hasSpecificGiftMatch) {
-        const trig = (action.trigger || "").trim();
-        if (trig === "") continue;
-      }
-
-      if (
-        type === "comment" &&
-        action.trigger &&
-        !String(data.comment || "").toLowerCase().includes(String(action.trigger).toLowerCase())
-      ) {
-        continue;
-      }
-
-      if (
-        type === "gift" &&
-        action.trigger &&
-        String(data.giftname || "").toLowerCase() !== String(action.trigger).toLowerCase()
-      ) {
-        continue;
-      }
-
-      let actionRepeatMultiplier = 1;
-
-        if (type === "like" && action.trigger) {
-          const triggerVal = Number.parseInt(action.trigger, 10);
-          if (Number.isNaN(triggerVal) || triggerVal <= 0) continue;
-
-          const currentLikes = userStats.likes || 0;
-          const prevMilestone = Math.floor(userLikesBefore / triggerVal);
-          const currMilestone = Math.floor(currentLikes / triggerVal);
-          const crossedMilestones = currMilestone - prevMilestone;
-
-          if (crossedMilestones <= 0) continue;
-
-          actionRepeatMultiplier = crossedMilestones;
-
-          this.logForUser(
-            "info",
-            `🎯 ${username} cruzó ${crossedMilestones} umbral(es) de ${triggerVal} like(s) (${userLikesBefore} → ${currentLikes})`,
-            uid
-          );
+        if (type === "gift" && hasSpecificGiftMatch) {
+          const trig = (action.trigger || "").trim();
+          if (trig === "") continue;
         }
 
-      const parsedCommand = this.parseCommand(action.command, data, uid);
-      let commands = this.splitCommands(parsedCommand);
-
-      if (!commands.length) continue;
-
-      const sourceName =
-        action.name ||
-        `${type}-${data.giftname || String(data.comment || "").slice(0, 10) || "event"}-u${uid}`;
-
-      // Determinar si es combo y cuántas iteraciones
-      let isCombo = false;
-      let comboIterations = 1;
-
-      if (type === "gift" && action.repeatPerUnit) {
-        const repeat = Number.parseInt(data.repeatcount, 10) || 1;
-        if (repeat > 1) {
-          isCombo = true;
-          comboIterations = repeat;
+        if (
+          type === "comment" &&
+          action.trigger &&
+          !String(data.comment || "").toLowerCase().includes(String(action.trigger).toLowerCase())
+        ) {
+          continue;
         }
-      }
 
-      if (type === "like" && actionRepeatMultiplier > 1) {
-        isCombo = true;
-        comboIterations = actionRepeatMultiplier;
-      }
+        if (
+          type === "gift" &&
+          action.trigger &&
+          String(data.giftname || "").toLowerCase() !== String(action.trigger).toLowerCase()
+        ) {
+          continue;
+        }
 
-      // En combos, SIEMPRE ejecución directa (no cola) para sincronizar audio por iteración
-      let shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
-      if (isCombo) {
-        shouldQueue = false;
-      }
+        let actionRepeatMultiplier = 1;
 
-      if (isCombo) {
-        // Ejecución por iteraciones: cada iteración es comandos + audio
-        this.logForUser(
-          "info",
-          `🔁 ${comboIterations} iteración(es) para acción [${action.name || action.trigger || type}]`,
-          uid
-        );
+          if (type === "like" && action.trigger) {
+            const triggerVal = Number.parseInt(action.trigger, 10);
+            if (Number.isNaN(triggerVal) || triggerVal <= 0) continue;
 
-        for (let iter = 0; iter < comboIterations; iter++) {
-          const iterLabel = `[${iter + 1}/${comboIterations}]`;
-          const iterSource = `${sourceName} ${iterLabel}`;
+            const currentLikes = userStats.likes || 0;
+            const prevMilestone = Math.floor(userLikesBefore / triggerVal);
+            const currMilestone = Math.floor(currentLikes / triggerVal);
+            const crossedMilestones = currMilestone - prevMilestone;
 
-          // Ejecutar comandos de esta iteración
-          if (shouldQueue) {
-            queue.add([...commands], iterSource, uid);
-            queued++;
+            if (crossedMilestones <= 0) continue;
+
+            actionRepeatMultiplier = crossedMilestones;
 
             this.logForUser(
               "info",
-              `📋 ${iterSource} a cola (${commands.length} comandos)`,
+              `🎯 ${username} cruzó ${crossedMilestones} umbral(es) de ${triggerVal} like(s) (${userLikesBefore} → ${currentLikes})`,
               uid
             );
-          } else {
+          }
+
+        const parsedCommand = this.parseCommand(action.command, data, uid);
+        let commands = this.splitCommands(parsedCommand);
+
+        if (!commands.length) continue;
+
+        const sourceName =
+          action.name ||
+          `${type}-${data.giftname || String(data.comment || "").slice(0, 10) || "event"}-u${uid}`;
+
+        // Determinar si es combo y cuántas iteraciones
+        let isCombo = false;
+        let comboIterations = 1;
+
+        if (type === "gift" && action.repeatPerUnit) {
+          const repeat = Number.parseInt(data.repeatcount, 10) || 1;
+          if (repeat > 1) {
+            isCombo = true;
+            comboIterations = repeat;
+          }
+        }
+
+        if (type === "like" && actionRepeatMultiplier > 1) {
+          isCombo = true;
+          comboIterations = actionRepeatMultiplier;
+        }
+
+        // Determinar si encolamos o ejecutamos directo
+        // En combos intentamos ejecución directa, pero si RCON no está, igual encolamos
+        let shouldQueue = (action.useQueue ?? false) || !rconService.isConnected(uid);
+
+        if (isCombo) {
+          // Ejecución por iteraciones: cada iteración es comandos + audio
+          this.logForUser(
+            "info",
+            `🔁 ${comboIterations} iteración(es) para acción [${action.name || action.trigger || type}]`,
+            uid
+          );
+
+        if (shouldQueue) {
+          // Si hay que encolar el combo, encolamos TODO como un bloque (sin audio)
+          const allCommands = [];
+          for (let iter = 0; iter < comboIterations; iter++) {
+            allCommands.push(...commands);
+          }
+
+          const iterLabel = `[1/${comboIterations}]`;
+          const iterSource = `${sourceName} ${iterLabel}`;
+          queue.add(allCommands, iterSource, uid);
+          queued++;
+
+          this.logForUser(
+            "info",
+            `📋 ${iterSource} a cola (${allCommands.length} comandos, ${comboIterations} iteraciones)`,
+            uid
+          );
+        } else {
+          // Ejecución directa: cada iteración con sus comandos + audio
+          for (let iter = 0; iter < comboIterations; iter++) {
+            const iterLabel = `[${iter + 1}/${comboIterations}]`;
+            const iterSource = `${sourceName} ${iterLabel}`;
+
+            // Ejecutar comandos de esta iteración
             for (let i = 0; i < commands.length; i++) {
               const cmd = commands[i];
 
@@ -400,93 +481,73 @@ class ActionsService {
                 );
               }
             }
-          }
 
-          // Reproducir audio para esta iteración (respeta audioPlayOncePerCombo)
-          const shouldPlayAudio = !action.audioPlayOncePerCombo || iter === 0;
-          if (shouldPlayAudio) {
-            const audioPlayCount = 1; // 1 audio por iteración (cuando aplicable)
-            await this._playAudioForAction(action, type, uid, audioPlayCount);
-          }
-
-          // Si waitForFinish está activo, esperar a que el audio termine antes de siguiente iteración
-          if (shouldPlayAudio && action.audioWaitForFinish && action.audioEnabled) {
-            const audioAsset = String(action.audioAsset || "").trim();
-            if (audioAsset) {
-              // Esperar a que la anterior cue termine
-              await new Promise((resolve) => {
-                const checkInterval = setInterval(() => {
-                  const pending = Array.from(audioService.pendingCues?.values?.() || [])
-                    .filter((item) => String(item.cue?.userId) === String(uid));
-
-                  if (pending.length === 0) {
-                    clearInterval(checkInterval);
-                    resolve();
-                  }
-                }, 100);
-
-                // Timeout de 120s por si acaso
-                setTimeout(() => {
-                  clearInterval(checkInterval);
-                  resolve();
-                }, 120000);
+            // Reproducir audio para esta iteración (respeta audioPlayOncePerCombo)
+            const shouldPlayAudio = !action.audioPlayOncePerCombo || iter === 0;
+            if (shouldPlayAudio) {
+              const audioPlayCount = 1; // 1 audio por iteración (cuando aplicable)
+              await this._playAudioForAction(action, type, uid, audioPlayCount, {
+                waitForFinish: true
               });
             }
-          }
 
-          // Pequeño delay entre iteraciones
-          if (iter < comboIterations - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            // Pequeño delay entre iteraciones
+            if (iter < comboIterations - 1) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
           }
         }
-      } else {
-        // Ejecución normal (sin combo): 1 grupo de comandos + audio
-        const commandGroups = [commands];
-
-        if (shouldQueue) {
-          for (let groupIndex = 0; groupIndex < commandGroups.length; groupIndex++) {
-            const groupCommands = commandGroups[groupIndex];
-
-            queue.add(groupCommands, sourceName, uid);
+        } else {
+          // Ejecución normal (sin combo): 1 grupo de comandos + audio
+          if (shouldQueue) {
+            queue.add([...commands], sourceName, uid);
             queued++;
 
             this.logForUser(
               "info",
-              `📋 [${sourceName}] grupo a cola (${groupCommands.length} comandos)`,
+              `📋 [${sourceName}] grupo a cola (${commands.length} comandos)`,
               uid
             );
-          }
-        } else {
-          for (let i = 0; i < commands.length; i++) {
-            const cmd = commands[i];
+          } else {
+            for (let i = 0; i < commands.length; i++) {
+              const cmd = commands[i];
 
-            try {
-              this.logForUser(
-                "command",
-                `[${action.name || sourceName}] ${cmd}`,
-                uid
-              );
+              try {
+                this.logForUser(
+                  "command",
+                  `[${action.name || sourceName}] ${cmd}`,
+                  uid
+                );
 
-              await rconService.send(cmd, uid);
-              executed++;
+                await rconService.send(cmd, uid);
+                executed++;
 
-              if (i < commands.length - 1) {
-                await new Promise((resolve) => setTimeout(resolve, 100));
+                if (i < commands.length - 1) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+              } catch (err) {
+                this.logForUser(
+                  "error",
+                  `❌ Error ejecutando comando: ${err?.message || err}`,
+                  uid
+                );
               }
-            } catch (err) {
-              this.logForUser(
-                "error",
-                `❌ Error ejecutando comando: ${err?.message || err}`,
-                uid
-              );
             }
+
+            // Reproducir audio una sola vez (sin combo) - SOLO si se ejecutó directo
+            const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
+            await this._playAudioForAction(action, type, uid, audioPlayCount, {
+              waitForFinish: !!action.audioWaitForFinish
+            });
           }
         }
-
-        // Reproducir audio una sola vez (sin combo)
-        const audioPlayCount = this._getAudioPlayCount(type, data, action, actionRepeatMultiplier);
-        await this._playAudioForAction(action, type, uid, audioPlayCount);
       }
+    } finally {
+      this._finishExecution(uid, execution.id, {
+        status: 'finished',
+        executed,
+        queued
+      });
     }
 
     if (queued > 0) {
@@ -508,6 +569,11 @@ class ActionsService {
 
   async handleEvent(type, data = {}, userId = DEFAULT_USER_ID, options = {}) {
     const uid = this.normalizeUserId(userId);
+
+    if (options?.parallel) {
+      return this._handleEvent(type, data, uid, options);
+    }
+
     const previousChain = this.userEventChains.get(uid) || Promise.resolve();
 
     const nextChain = previousChain
@@ -523,6 +589,13 @@ class ActionsService {
         this.userEventChains.delete(uid);
       }
     }
+  }
+
+  getStatus(userId = DEFAULT_USER_ID) {
+    const uid = this.normalizeUserId(userId);
+    return {
+      activeExecutions: this.getActiveExecutions(uid)
+    };
   }
 }
 

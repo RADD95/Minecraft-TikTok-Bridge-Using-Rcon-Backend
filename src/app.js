@@ -33,6 +33,7 @@ const rconService = require("./services/infra/rcon");
 const tiktokService = require("./services/platforms/tiktok");
 const queue = require("./services/core/queue");
 const audioService = require("./services/core/audio");
+const actionsService = require("./services/core/actions");
 
 const { requireAuth } = require("./middleware/auth");
 const { requireAdmin } = require("./middleware/admin");
@@ -235,6 +236,9 @@ function getRuntimeStatus(userId) {
   const rconDetails = getScopedRconDetails(userId);
   const tiktokDetails = getScopedTikTokDetails(userId);
   const queueStatus = getScopedQueueStatus(userId);
+  const executionsStatus = typeof actionsService.getStatus === "function"
+    ? actionsService.getStatus(userId)
+    : { activeExecutions: [] };
 
   return {
     rcon: !!rconDetails.connected,
@@ -242,6 +246,11 @@ function getRuntimeStatus(userId) {
     rconDetails,
     tiktokDetails,
     queue: queueStatus,
+    executions: {
+      activeList: Array.isArray(executionsStatus?.activeExecutions)
+        ? executionsStatus.activeExecutions
+        : []
+    },
     config: getScopedConfig(userId)
   };
 }
