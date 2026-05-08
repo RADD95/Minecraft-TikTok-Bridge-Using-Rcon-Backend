@@ -242,6 +242,7 @@ module.exports = {
             }, userId, {
               onlyActionIndex: index,
               source: `manual-test-${iteration + 1}`,
+              actionName: action.name || action.trigger || type,
               parallel: true
             })
           );
@@ -257,6 +258,7 @@ module.exports = {
         runtimeResult = await actionsService.handleEvent(type, payload, userId, {
           onlyActionIndex: index,
           source: 'manual-test',
+          actionName: action.name || action.trigger || type,
           parallel: true
         });
       }
