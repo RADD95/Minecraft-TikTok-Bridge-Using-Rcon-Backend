@@ -464,6 +464,10 @@ class ActionsService {
             totalIterations
           }
         });
+        // Indicar si la acción tiene audio configurado para que el frontend no muestre ETA
+        this._updateExecution(uid, execution.id, {
+          hasAudio: !!action.audioEnabled && String(action.audioAsset || '').trim() !== ''
+        });
 
         // Determinar si encolamos o ejecutamos directo
         // En combos intentamos ejecución directa, pero si RCON no está, igual encolamos
@@ -523,6 +527,10 @@ class ActionsService {
                     totalIterations
                   }
                 });
+                // también actualizar estado hasAudio por si no se estableció antes
+                this._updateExecution(uid, execution.id, {
+                  hasAudio: !!action.audioEnabled && String(action.audioAsset || '').trim() !== ''
+                });
 
                 if (i < commands.length - 1) {
                   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -553,6 +561,9 @@ class ActionsService {
                 completedIterations: iter + 1,
                 totalIterations
               }
+            });
+            this._updateExecution(uid, execution.id, {
+              hasAudio: !!action.audioEnabled && String(action.audioAsset || '').trim() !== ''
             });
 
             // Pequeño delay entre iteraciones
@@ -594,6 +605,9 @@ class ActionsService {
                     completedIterations: 1,
                     totalIterations: 1
                   }
+                });
+                this._updateExecution(uid, execution.id, {
+                  hasAudio: !!action.audioEnabled && String(action.audioAsset || '').trim() !== ''
                 });
 
                 if (i < commands.length - 1) {
