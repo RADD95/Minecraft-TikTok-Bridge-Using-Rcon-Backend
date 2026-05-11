@@ -439,7 +439,7 @@ class Storage {
           Math.max(0, Math.min(100, Number.parseInt(action?.audioVolume, 10) || 70)),
           action?.audioWaitForFinish ? 1 : 0,
           action?.audioReplaceCurrent ? 1 : 0,
-          action?.audioPlayOncePerCombo === false ? 0 : 1,
+          action?.audioPlayOncePerCombo ? 1 : 0,
           action?.enabled === false ? 0 : 1,
           action?.minecraftVersion || '',
           action?.folder || ''

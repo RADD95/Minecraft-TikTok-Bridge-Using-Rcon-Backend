@@ -284,7 +284,8 @@ function normalizeGalleryAudioPayload(source = {}) {
     audioVolume: clampInt(source.audioVolume, 0, 100, 70),
     audioWaitForFinish: !!source.audioWaitForFinish,
     audioReplaceCurrent: !!source.audioReplaceCurrent,
-    audioPlayOncePerCombo: source.audioPlayOncePerCombo === false ? false : true
+    // Default to false: play per unit unless explicitly true
+    audioPlayOncePerCombo: source.audioPlayOncePerCombo === true ? true : false
   };
 }
 

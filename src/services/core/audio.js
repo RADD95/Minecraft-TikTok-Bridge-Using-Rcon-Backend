@@ -9,7 +9,8 @@ class AudioService extends EventEmitter {
     this.pendingCues = new Map();
     this.cueIndex = new Map();
     this.userQueues = new Map();
-    this.activeCueByUser = new Map();
+    // Map userId -> Set(cueId) to allow multiple concurrent cues per user
+    this.activeCuesByUser = new Map();
   }
 
   normalizeUserId(userId) {
@@ -37,13 +38,14 @@ class AudioService extends EventEmitter {
   _emitState(userId = DEFAULT_USER_ID, reason = "update") {
     const uid = this.normalizeUserId(userId);
     const pending = Array.from(this.pendingCues.values()).filter((item) => String(item.userId) === String(uid)).length;
-    const currentCueId = this.activeCueByUser.get(uid) || null;
+    const currentSet = this.activeCuesByUser.get(uid);
+    const currentCueIds = currentSet ? Array.from(currentSet) : [];
 
     this.emit("state", {
       userId: uid,
       reason,
       pending,
-      currentCueId
+      currentCueIds
     });
   }
 
@@ -90,35 +92,45 @@ class AudioService extends EventEmitter {
   _pumpUserQueue(userId) {
     const uid = this.normalizeUserId(userId);
 
-    if (this.activeCueByUser.has(uid)) {
-      return;
-    }
-
     const queue = this._getQueue(uid);
+
+    // Ensure we have a Set for active cues
+    if (!this.activeCuesByUser.has(uid)) this.activeCuesByUser.set(uid, new Set());
+
     while (queue.length > 0) {
       const nextCueId = queue.shift();
       const entry = this.pendingCues.get(nextCueId);
 
       if (!entry) continue;
 
-      this.activeCueByUser.set(uid, nextCueId);
+      // Start the cue immediately (concurrent by default)
+      const activeSet = this.activeCuesByUser.get(uid);
+      activeSet.add(nextCueId);
       this._startCue(entry);
-      return;
+      // continue to start next queued cues as well
     }
 
-    this.activeCueByUser.delete(uid);
-    this._emitState(uid, "idle");
+    const activeSetAfter = this.activeCuesByUser.get(uid);
+    if (!activeSetAfter || activeSetAfter.size === 0) {
+      this.activeCuesByUser.delete(uid);
+      this._emitState(uid, "idle");
+    } else {
+      this._emitState(uid, "update");
+    }
   }
 
   _replacePendingForUser(userId, keepCueId = null) {
     const uid = this.normalizeUserId(userId);
-    const activeCueId = this.activeCueByUser.get(uid);
-
-    if (activeCueId && activeCueId !== keepCueId) {
-      this.finishCue(activeCueId, {
-        status: "stopped",
-        reason: "replaced-by-new"
-      });
+    // Stop any active cues for this user (except keepCueId) and clear queue
+    const activeSet = this.activeCuesByUser.get(uid);
+    if (activeSet) {
+      for (const activeCueId of Array.from(activeSet)) {
+        if (activeCueId === keepCueId) continue;
+        this.finishCue(activeCueId, {
+          status: "stopped",
+          reason: "replaced-by-new"
+        });
+      }
     }
 
     const queue = this._getQueue(uid);
@@ -232,9 +244,16 @@ class AudioService extends EventEmitter {
       );
     }
 
-    if (this.activeCueByUser.get(uid) === id) {
-      this.activeCueByUser.delete(uid);
-      this._pumpUserQueue(uid);
+    // Remove from active set if present
+    const activeSet = this.activeCuesByUser.get(uid);
+    if (activeSet && activeSet.has(id)) {
+      activeSet.delete(id);
+      if (activeSet.size === 0) {
+        this.activeCuesByUser.delete(uid);
+        this._emitState(uid, "idle");
+      } else {
+        this._emitState(uid, "cue-finished");
+      }
     } else {
       this._emitState(uid, "cue-finished");
     }

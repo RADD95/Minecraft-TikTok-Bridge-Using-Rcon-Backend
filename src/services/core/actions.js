@@ -267,8 +267,8 @@ class ActionsService {
     const planned = Math.max(1, Number.parseInt(count, 10) || 1);
     const waitForFinish = options.waitForFinish ?? !!action.audioWaitForFinish;
     const replaceCurrent = !!action.audioReplaceCurrent;
-    // Si audioPlayOncePerCombo es true, reproducir solo 1 vez. Si es false, reproducir 'planned' veces
-    const repeatCount = action.audioPlayOncePerCombo !== false ? 1 : planned;
+    // Si audioPlayOncePerCombo es true, reproducir solo 1 vez. Por defecto reproducir por unidad (false)
+    const repeatCount = action.audioPlayOncePerCombo === true ? 1 : planned;
 
     let accepted = 0;
 
