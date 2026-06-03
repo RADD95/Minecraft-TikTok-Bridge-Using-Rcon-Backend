@@ -658,25 +658,9 @@ class ActionsService {
   async handleEvent(type, data = {}, userId = DEFAULT_USER_ID, options = {}) {
     const uid = this.normalizeUserId(userId);
 
-    if (options?.parallel) {
-      return this._handleEvent(type, data, uid, options);
-    }
-
-    const previousChain = this.userEventChains.get(uid) || Promise.resolve();
-
-    const nextChain = previousChain
-      .catch(() => undefined)
-      .then(() => this._handleEvent(type, data, uid, options));
-
-    this.userEventChains.set(uid, nextChain);
-
-    try {
-      return await nextChain;
-    } finally {
-      if (this.userEventChains.get(uid) === nextChain) {
-        this.userEventChains.delete(uid);
-      }
-    }
+    // Procesar cada evento de forma independiente para no bloquear chat
+    // ni otras donaciones mientras una acción con audio sigue ejecutándose.
+    return this._handleEvent(type, data, uid, options);
   }
 
   getStatus(userId = DEFAULT_USER_ID) {
