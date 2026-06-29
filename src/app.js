@@ -692,39 +692,83 @@ app.post("/api/cache-audio", requireAuth, async (req, res) => {
 // Cache de imágenes TikTok / Minecraft para el editor
 app.post("/api/cache-image", requireAuth, async (req, res) => {
   try {
-    const { url } = req.body || {};
+    const { url, dataBase64, fileName: fileNameRaw } = req.body || {};
 
+    // --- Rama 1: base64 local ---
+    if (dataBase64) {
+      const m = String(dataBase64).match(/^data:(image\/[^;]+);base64,(.+)$/i);
+      if (!m) {
+        return res.status(400).json({ success: false, error: "dataBase64 inválido" });
+      }
+
+      const mimeType = m[1].toLowerCase();
+      const buf = Buffer.from(m[2], "base64");
+
+      if (!buf.length) {
+        return res.status(400).json({ success: false, error: "Imagen vacía" });
+      }
+      if (buf.length > 10 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: "Imagen demasiado grande (max 10MB)" });
+      }
+
+      const mimeToExt = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg"
+      };
+      const ext = mimeToExt[mimeType] || ".png";
+
+      const hash = crypto.createHash("sha1").update(buf).digest("hex");
+      const fileName = `${hash}${ext}`;
+      const filePath = path.join(IMAGE_CACHE_DIR, fileName);
+
+      if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, buf);
+      }
+
+      return res.json({ success: true, cachedUrl: `/cache/img/${fileName}` });
+    }
+
+    // --- Rama 2: URL remota (comportamiento original) ---
     if (!url) {
-      return res.status(400).json({ success: false, error: "url requerida" });
+      return res.status(400).json({ success: false, error: "url o dataBase64 requerido" });
     }
 
     const hash = crypto.createHash("sha1").update(url).digest("hex");
     const extFromUrl = path.extname(new URL(url).pathname) || ".png";
     const ext = extFromUrl.toLowerCase().split("?")[0] || ".png";
-
     const fileName = `${hash}${ext}`;
     const filePath = path.join(IMAGE_CACHE_DIR, fileName);
 
     if (!fs.existsSync(filePath)) {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
       const buf = resp.arrayBuffer
         ? Buffer.from(await resp.arrayBuffer())
         : await resp.buffer();
-
       fs.writeFileSync(filePath, buf);
     }
 
-    return res.json({
-      success: true,
-      cachedUrl: `/cache/img/${fileName}`
-    });
+    return res.json({ success: true, cachedUrl: `/cache/img/${fileName}` });
   } catch (e) {
     console.error("Error cacheando imagen", e);
     return res.status(500).json({ success: false, error: e.message });
   }
 });
+
+// Limpieza periódica de base64 huérfanos cada 24h
+const { runBase64Cleanup } = require('./services/infra/cache-assets');
+const _cleanupDb = getDb();
+setInterval(() => {
+  try { runBase64Cleanup(_cleanupDb); } catch (e) { logger.warn('Error en limpieza base64:', e); }
+}, 24 * 60 * 60 * 1000);
+// Ejecutar una vez al arrancar para sanear lo que ya esté sucio
+setTimeout(() => {
+  try { runBase64Cleanup(_cleanupDb); } catch (e) { logger.warn('Error en limpieza base64 inicial:', e); }
+}, 10 * 1000);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("╔═══════════════════════════════════════╗");

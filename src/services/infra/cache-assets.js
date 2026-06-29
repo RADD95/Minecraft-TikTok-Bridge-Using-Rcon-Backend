@@ -289,11 +289,108 @@ function normalizeGalleryAudioPayload(source = {}) {
   };
 }
 
+// --- Limpieza periódica: base64 huérfanos + imágenes sin referencia ---
+
+function migrateBase64InJson(jsonValue) {
+  // Retorna el mismo valor sin cambios — la migración real
+  // se hace desde el frontend al guardar con /api/cache-image.
+  // Esta función solo detecta si hay base64 sin migrar.
+  if (typeof jsonValue !== 'string') return { hasDirty: false };
+  if (jsonValue.includes('data:image/')) return { hasDirty: true };
+  return { hasDirty: false };
+}
+
+function getOverlaysWithBase64(db) {
+  return db.prepare(`
+    SELECT id, user_id, elements_json, groups_json, preview
+    FROM overlays
+    WHERE
+      preview LIKE 'data:image/%'
+      OR elements_json LIKE '%data:image/%'
+      OR groups_json LIKE '%data:image/%'
+  `).all();
+}
+
+function purgeBase64FromOverlay(db, row) {
+  // Limpia base64 reemplazándolo por string vacío — solo para
+  // overlays que llevan más de 24h sin actualizarse.
+  const updated = db.prepare(`
+    UPDATE overlays
+    SET
+      preview = CASE WHEN preview LIKE 'data:image/%' THEN '' ELSE preview END,
+      elements_json = REPLACE(elements_json, preview, ''),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(row.id);
+  return updated.changes > 0;
+}
+
+function runBase64Cleanup(db) {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    .toISOString()
+    .replace('T', ' ')
+    .slice(0, 19);
+
+  const staleRows = db.prepare(`
+    SELECT id, user_id, elements_json, groups_json, preview
+    FROM overlays
+    WHERE (
+      preview LIKE 'data:image/%'
+      OR elements_json LIKE '%data:image/%'
+      OR groups_json LIKE '%data:image/%'
+    )
+    AND updated_at < ?
+  `).all(cutoff);
+
+  let cleaned = 0;
+  for (const row of staleRows) {
+    try {
+      // Limpiar preview base64
+      const newPreview = (row.preview || '').startsWith('data:image/') ? '' : (row.preview || '');
+
+      // Limpiar elements_json: quitar src/url base64 dentro de los objetos
+      let elements = [];
+      try { elements = JSON.parse(row.elements_json || '[]'); } catch { elements = []; }
+      elements = elements.map(el => {
+        if (typeof el.src === 'string' && el.src.startsWith('data:image/')) el.src = '';
+        if (typeof el.url === 'string' && el.url.startsWith('data:image/')) el.url = '';
+        return el;
+      });
+
+      // Limpiar groups_json igual
+      let groups = [];
+      try { groups = JSON.parse(row.groups_json || '[]'); } catch { groups = []; }
+      groups = groups.map(g => {
+        if (typeof g.src === 'string' && g.src.startsWith('data:image/')) g.src = '';
+        if (typeof g.url === 'string' && g.url.startsWith('data:image/')) g.url = '';
+        return g;
+      });
+
+      db.prepare(`
+        UPDATE overlays
+        SET preview = ?, elements_json = ?, groups_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(newPreview, JSON.stringify(elements), JSON.stringify(groups), row.id);
+
+      cleaned++;
+    } catch (err) {
+      logger.warn(`No se pudo limpiar base64 del overlay ${row.id}: ${err?.message || err}`);
+    }
+  }
+
+  if (cleaned > 0) {
+    logger.info(`🧹 Limpieza base64: ${cleaned} overlay(s) saneados`);
+  }
+
+  return cleaned;
+}
+
 module.exports = {
   cleanupOrphanAudioAsset,
   cleanupOrphanImageAsset,
   cleanupRemovedOverlayAssets,
   getOverlayImageAssetPaths,
   normalizeGalleryAudioPayload,
-  parseCacheAsset
+  parseCacheAsset,
+  runBase64Cleanup  
 };
